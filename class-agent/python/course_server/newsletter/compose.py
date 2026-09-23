@@ -263,9 +263,12 @@ def build_editorial_system_prompt(branding: NewsletterBranding) -> str:
         "Markdown [text](https://url) syntax; otherwise add none. Never invent a URL.\n"
         "- quote_choice: from the candidate quotes taken from students' own posts, choose the "
         "one with the most personality as a closing line: surprising, funny, candid, or vivid, "
-        "and complete enough to make sense to someone who has not read the post. Reject "
+        "complete enough to make sense to someone who has not read the post, and clearly about "
+        "agents, AI, or human cognition and how agents augment it (the course's theme). A witty "
+        "line about an unrelated subject loses to a plainer line about agents. Reject "
         "definitions, restatements of the assignment, fragments that depend on missing context, "
-        "and anything a textbook could have said; answer 0 rather than pick a bland one."
+        "and anything a textbook could have said; answer 0 rather than pick a bland or "
+        "off-topic one."
     )
 
 

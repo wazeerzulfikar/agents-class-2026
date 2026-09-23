@@ -62,10 +62,12 @@ SCORE_SCHEMA: dict[str, object] = {
                 "Up to three passages copied exactly, character for character, from the "
                 "student's own prose (not code, headings, or assignment text) that would make "
                 "a memorable closing line: surprising, funny, candid about a failure, or a vivid "
-                "way of seeing agents. Each passage must stand on its own: one to two consecutive "
-                "sentences, at most 40 words, including any sentence a punchline depends on. "
-                "Never a definition or a restatement of the assignment. Empty list if nothing "
-                "has personality."
+                "way of seeing agents. It must be about agents, AI, or human cognition (thinking, "
+                "attention, memory, learning, judgment) or how the build helps a person; skip "
+                "witty lines about unrelated things such as file names, visual style, or names. "
+                "Each passage must stand on its own: one to two consecutive sentences, at most "
+                "40 words, including any sentence a punchline depends on. Never a definition or "
+                "a restatement of the assignment. Empty list if nothing qualifies."
             ),
         },
     },
@@ -112,11 +114,13 @@ def build_score_system_prompt(branding: NewsletterBranding) -> str:
         "difficulty or left gaps, so an editor can summarize the week. Refer to the student by "
         "the label. Finally, `quotes`: up to three passages from the student's own prose that "
         "have personality (a surprising observation, a candid failure, a joke that lands, a vivid "
-        "metaphor), copied exactly as written because each is checked verbatim against the "
-        "source. A passage must make sense on its own: if the line you like is a punchline, "
-        "include the consecutive sentence before it that sets it up, within 40 words in total. "
-        "Skip definitions and assignment restatements, and return an empty list rather than "
-        "something bland. Respond with JSON matching the schema and nothing else."
+        "metaphor) and are about agents, AI, or human cognition, or about how the build helps a "
+        "person think, remember, learn, or decide. Copy them exactly as written because each is "
+        "checked verbatim against the source. A passage must make sense on its own: if the line "
+        "you like is a punchline, include the consecutive sentence before it that sets it up, "
+        "within 40 words in total. Skip definitions, assignment restatements, and witty lines "
+        "about unrelated subjects, and return an empty list rather than something bland. "
+        "Respond with JSON matching the schema and nothing else."
     )
 
 
