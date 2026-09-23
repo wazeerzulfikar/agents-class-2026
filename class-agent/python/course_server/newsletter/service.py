@@ -1,4 +1,4 @@
-"""Instructor-run newsletter workflow: draft for review, then send only on explicit approval."""
+"""Instructor-run newsletter workflow: score, select, illustrate, draft, then send on approval."""
 
 from __future__ import annotations
 
@@ -11,11 +11,11 @@ from pydantic import EmailStr, ValidationError
 from course_server.mail.models import InlineImage, MailAdapter, OutboundMail
 
 from .collect import WeeklyEvidenceCollector
-from .compose import NewsletterWriter, compose_newsletter
+from .compose import NewsletterCompositionError, NewsletterWriter, compose_newsletter
+from .images import HighlightImageFinder
 from .models import (
     CourseWeek,
     Delivery,
-    Highlight,
     HighlightImage,
     NewsletterIssue,
     NewsletterModel,
@@ -23,13 +23,15 @@ from .models import (
     PioneerQuote,
     ProjectEvidence,
     ProjectLink,
+    ProjectScore,
     WeeklyDigest,
     issue_id_for,
 )
 from .quotes import PIONEER_QUOTES, choose_quote
 from .render import cid_image_source, render_html, render_text
 from .schedule import select_week
-from .screenshots import ScreenshotError, SiteScreenshotter
+from .score import score_projects, select_highlights
+from .screenshots import ScreenshotError
 from .store import FileNewsletterStore
 
 
@@ -66,7 +68,7 @@ class NewsletterService:
         store: FileNewsletterStore,
         collector: WeeklyEvidenceCollector | None = None,
         writer: NewsletterWriter | None = None,
-        screenshotter: SiteScreenshotter | None = None,
+        image_finder: HighlightImageFinder | None = None,
         quotes: tuple[PioneerQuote, ...] = PIONEER_QUOTES,
         model_id: str | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -76,7 +78,7 @@ class NewsletterService:
         self._weeks = tuple(weeks)
         self._collector = collector
         self._writer = writer
-        self._screenshotter = screenshotter
+        self._image_finder = image_finder
         self._store = store
         self._quotes = quotes
         self._model_id = model_id
@@ -117,11 +119,20 @@ class NewsletterService:
             highlight_count=self._settings.highlight_count,
         )
         self._log(
-            f"{len(digest.eligible_project_ids())} of {len(evidence)} projects are eligible; "
-            f"asking the model for {digest.target_highlight_count()} highlights."
+            f"Scoring {sum(1 for item in evidence if item.active)} active projects "
+            f"({len(digest.eligible_project_ids())} eligible for highlights)."
         )
-        copy = compose_newsletter(digest, self._writer, branding=self._settings.branding)
-        images = self._capture_images(issue_id, copy.highlights, evidence)
+        scores = score_projects(
+            digest, self._writer, branding=self._settings.branding, log=self._log
+        )
+        selected = select_highlights(scores, count=digest.highlight_count)
+        if not selected:
+            raise NewsletterCompositionError("No eligible project could be scored this week.")
+        self._log("Selected: " + ", ".join(selected))
+        images = self._find_images(issue_id, selected, evidence, week, scores)
+        copy = compose_newsletter(
+            digest, self._writer, selected=selected, branding=self._settings.branding
+        )
         issue = NewsletterIssue(
             issue_id=issue_id,
             week=week,
@@ -137,6 +148,7 @@ class NewsletterService:
                 used_texts=self._store.used_quote_texts(),
                 quotes=self._quotes,
             ),
+            scores=scores,
             images=images,
             model_id=self._model_id,
             created_at=self._clock(),
@@ -144,36 +156,52 @@ class NewsletterService:
         self._store.save(issue)
         return issue
 
-    def _capture_images(
+    def _find_images(
         self,
         issue_id: str,
-        highlights: Sequence[Highlight],
+        selected: Sequence[str],
         evidence: Sequence[ProjectEvidence],
+        week: CourseWeek,
+        scores: Sequence[ProjectScore],
     ) -> tuple[HighlightImage, ...]:
-        if self._screenshotter is None:
+        self._store.clear_images(issue_id)
+        if self._image_finder is None:
             return ()
-        sites = {item.project_id: item.site_url for item in evidence}
+        projects = {item.project_id: item for item in evidence}
+        rationale = {score.project_id: score.rationale for score in scores}
         images: list[HighlightImage] = []
-        for highlight in highlights:
-            site_url = sites.get(highlight.project_id)
-            if site_url is None:
+        for project_id in selected:
+            project = projects.get(project_id)
+            if project is None or project.site_url is None:
                 continue
+            context = f"{project.label}: {rationale.get(project_id, '')}".strip(": ")
             try:
-                shot = self._screenshotter(site_url)
+                found = self._image_finder.find(
+                    site_url=project.site_url, week=week, context=context
+                )
             except ScreenshotError as error:
-                self._log(f"  {highlight.project_id}: no screenshot ({error})")
+                self._log(f"  {project_id}: no image ({error})")
                 continue
-            extension = "png" if shot.media_type == "image/png" else "jpg"
-            filename = f"{highlight.project_id}.{extension}"
-            self._store.save_image(issue_id, filename, shot.data)
-            self._log(f"  {highlight.project_id}: screenshot saved ({len(shot.data)} bytes)")
+            if found is None:
+                self._log(f"  {project_id}: no image found")
+                continue
+            extension = "png" if found.shot.media_type == "image/png" else "jpg"
+            filename = f"{project_id}.{extension}"
+            self._store.save_image(issue_id, filename, found.shot.data)
+            self._log(
+                f"  {project_id}: {found.kind.replace('_', ' ')} from {found.page_url} "
+                f"({len(found.shot.data)} bytes)"
+            )
             images.append(
                 HighlightImage(
-                    project_id=highlight.project_id,
+                    project_id=project_id,
                     filename=filename,
-                    media_type=shot.media_type,
-                    width=shot.width,
-                    height=shot.height,
+                    media_type=found.shot.media_type,
+                    width=found.shot.width,
+                    height=found.shot.height,
+                    kind=found.kind,
+                    source_url=found.source_url,
+                    page_url=found.page_url,
                 )
             )
         return tuple(images)

@@ -20,10 +20,10 @@ from course_server.web_search import fetch_public_webpage
 
 from .collect import WeeklyEvidenceCollector
 from .compose import NewsletterCompositionError, OpenAINewsletterWriter
+from .images import PlaywrightImageFinder
 from .models import NewsletterIssue, NewsletterSettings
 from .render import render_html, render_text
 from .schedule import NewsletterScheduleError, load_schedule
-from .screenshots import PlaywrightScreenshotter
 from .service import NewsletterService, NewsletterStateError
 from .store import FileNewsletterStore, NewsletterStoreError
 
@@ -103,15 +103,17 @@ def _drafting_service(values: Mapping[str, str], *, log: TextIO) -> NewsletterSe
         api_key=agent_settings.model_api_key,
     )
     executable = agent_settings.browser_executable_path
-    screenshotter = PlaywrightScreenshotter(
-        executable_path=executable if executable is not None and executable.is_file() else None
+    image_finder = PlaywrightImageFinder(
+        judge=writer.judge_images,
+        executable_path=executable if executable is not None and executable.is_file() else None,
+        log=lambda message: print(message, file=log),
     )
     return NewsletterService(
         settings=settings,
         weeks=load_schedule(settings.schedule_path, timezone=settings.timezone),
         collector=collector,
         writer=writer,
-        screenshotter=screenshotter,
+        image_finder=image_finder,
         store=store,
         model_id=agent_settings.model_id,
         log=lambda message: print(message, file=log),
@@ -143,6 +145,25 @@ def _print_issue(issue: NewsletterIssue, store: FileNewsletterStore, *, out: Tex
     print(f"Issue: {issue.issue_id} ({issue.status})", file=out)
     print(f"Subject: {issue.subject}", file=out)
     print(f"Files: {json_path}\n       {text_path}\n       {html_path}", file=out)
+    print("", file=out)
+
+
+def _print_scores(issue: NewsletterIssue, *, out: TextIO) -> None:
+    if not issue.scores:
+        return
+    featured = set(issue.highlighted_project_ids())
+    print("Scoreboard (goal fit 40% · interest 40% · execution 20%):", file=out)
+    print("  TOTAL  GOAL  INT  EXEC  PROJECT", file=out)
+    for score in issue.scores:
+        marker = "*" if score.project_id in featured else " "
+        flag = "" if score.eligible else "  (featured recently)"
+        print(
+            f"{marker} {score.total:5.1f}  {score.goal_fit:>4}  {score.interest:>3}  "
+            f"{score.execution:>4}  {score.project_id}{flag}",
+            file=out,
+        )
+        if score.rationale:
+            print(f"           {score.rationale}", file=out)
     print("", file=out)
 
 
@@ -232,11 +253,12 @@ def _run(
             week_number=arguments.week, as_of=arguments.as_of, force=arguments.force
         )
         _print_issue(issue, store, out=out)
+        _print_scores(issue, out=out)
         if not arguments.quiet:
             print(render_text(issue), file=out)
         print(
             "Review the draft above; open the .html file in a browser to see the designed "
-            "version with screenshots. To send it:\n"
+            "version with images. To send it:\n"
             f"  python -m {MODULE} send {issue.issue_id} --to you@example.edu\n"
             f"  python -m {MODULE} send {issue.issue_id} --to-active-students\n"
             f"To try a test copy first:  python -m {MODULE} send {issue.issue_id} "
@@ -252,6 +274,8 @@ def _run(
             print(f"Issue {arguments.issue_id} does not exist.", file=err)
             return 2
         _print_issue(stored, store, out=out)
+        if not arguments.html:
+            _print_scores(stored, out=out)
         print(render_html(stored) if arguments.html else render_text(stored), file=out)
         return 0
     if arguments.command == "list":

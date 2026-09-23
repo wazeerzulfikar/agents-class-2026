@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from course_server.newsletter import (
     CourseWeek,
     EvidenceLimits,
     FileNewsletterStore,
+    FoundImage,
     Highlight,
     HighlightImage,
     NewsletterBranding,
@@ -32,22 +34,30 @@ from course_server.newsletter import (
     NewsletterStoreError,
     ProjectEvidence,
     ProjectLink,
+    ProjectScore,
     ScreenshotError,
     SiteScreenshot,
     WeeklyDigest,
     WeeklyEvidenceCollector,
+    build_judge_prompt,
     build_user_prompt,
     choose_quote,
     cid_image_source,
     compose_newsletter,
+    discover_week_anchor,
+    discover_week_pages,
     encode_jpeg,
+    filter_candidates,
     parse_schedule,
     project_label,
     render_html,
     render_text,
+    score_projects,
+    select_highlights,
     select_week,
 )
 from course_server.newsletter.cli import main as newsletter_main
+from course_server.newsletter.score import SCORING_MARKER
 from course_server.student_projects import (
     RepositoryView,
     StudentProject,
@@ -282,91 +292,248 @@ def copy_json(*project_ids: str, extra: str = "") -> str:
                 {
                     "project_id": project_id,
                     "headline": f"{project_id} gets loopy",
-                    "summary": "A from-scratch loop.",
-                    "goal_link": "It is the minimal loop the brief asked for.",
+                    "description": (
+                        "A from-scratch loop. It is the minimal loop the brief asked for."
+                    ),
                 }
                 for project_id in project_ids
             ],
-            "closing": "Scroll on for everyone else.",
+        }
+    )
+
+
+def score_json(goal_fit: int, interest: int, execution: int, rationale: str = "ok") -> str:
+    return json.dumps(
+        {
+            "interest": interest,
+            "execution": execution,
+            "goal_fit": goal_fit,
+            "rationale": rationale,
         }
     )
 
 
 @dataclass
 class ScriptedWriter:
+    """Copy responses are consumed in order; scores are looked up by project id."""
+
     responses: list[str]
+    scores: dict[str, str] = field(default_factory=dict)
     prompts: list[str] = field(default_factory=list)
+    score_prompts: list[str] = field(default_factory=list)
+    judge_prompts: list[str] = field(default_factory=list)
+    judge_choice: int = 1
 
     def write(self, *, system_prompt: str, user_prompt: str, schema: dict[str, object]) -> str:
-        assert "Respond with JSON" in system_prompt
         assert schema["type"] == "object"
+        if system_prompt.startswith(SCORING_MARKER):
+            self.score_prompts.append(user_prompt)
+            project_id = user_prompt.split("Project id: ", 1)[1].split("\n", 1)[0]
+            return self.scores.get(project_id, score_json(6, 6, 6))
+        assert "Respond with JSON" in system_prompt
         self.prompts.append(user_prompt)
         return self.responses.pop(0)
 
+    def judge_images(self, *, prompt: str, images: Sequence[bytes]) -> int:
+        self.judge_prompts.append(prompt)
+        return self.judge_choice
 
-def test_compose_enforces_eligibility_and_reprompts_once_with_concrete_problems() -> None:
+
+def test_compose_writes_only_the_selected_projects_in_order_and_reprompts_once() -> None:
     week = weeks()[0]
     digest = digest_for(week, cooldown=frozenset({"agents2026-hal"}))
+    selected = ("agents2026-ada", "agents2026-grace")
     writer = ScriptedWriter(
         [
-            copy_json("agents2026-hal", "agents2026-ada", "agents2026-ada"),
+            copy_json("agents2026-grace", "agents2026-ada", "agents2026-ada"),
             copy_json("agents2026-ada", "agents2026-grace"),
         ]
     )
 
-    copy = compose_newsletter(digest, writer, branding=NewsletterBranding())
+    copy = compose_newsletter(digest, writer, selected=selected, branding=NewsletterBranding())
 
-    assert [item.project_id for item in copy.highlights] == ["agents2026-ada", "agents2026-grace"]
+    assert [item.project_id for item in copy.highlights] == list(selected)
     assert len(writer.prompts) == 2
-    assert "INELIGIBLE (featured recently)" in writer.prompts[0]
-    assert "INELIGIBLE (no build activity this week)" in writer.prompts[0]
+    assert "Featured projects, in order: agents2026-ada, agents2026-grace" in writer.prompts[0]
+    assert "FEATURED #1" in writer.prompts[0] and "agents2026-idle" not in writer.prompts[0]
     assert "goal for the week: Build a minimal agent loop.\n" in writer.prompts[0]
     assert "rejected" in writer.prompts[1]
-    assert "agents2026-hal was featured recently" in writer.prompts[1]
-    assert "highlighted more than once" in writer.prompts[1]
-    assert "expected exactly 2 highlights, got 3" in writer.prompts[1]
+    assert "exactly these project ids in this order" in writer.prompts[1]
 
     with pytest.raises(NewsletterCompositionError, match="broke platform rules"):
         compose_newsletter(
             digest,
             ScriptedWriter([copy_json("agents2026-idle"), copy_json("agents2026-idle")]),
+            selected=selected,
             branding=NewsletterBranding(),
         )
     with pytest.raises(NewsletterCompositionError, match="invalid JSON"):
-        compose_newsletter(digest, ScriptedWriter(["not json"]), branding=NewsletterBranding())
+        compose_newsletter(
+            digest, ScriptedWriter(["not json"]), selected=selected, branding=NewsletterBranding()
+        )
     with pytest.raises(NewsletterCompositionError, match="must not contain links"):
         compose_newsletter(
             digest,
             ScriptedWriter(
                 [
-                    copy_json("agents2026-ada", "agents2026-grace", extra=" See https://x.y"),
-                    copy_json("agents2026-ada", "agents2026-grace", extra=" Mail me@x.edu"),
+                    copy_json(*selected, extra=" See https://x.y"),
+                    copy_json(*selected, extra=" Mail me@x.edu"),
                 ]
             ),
+            selected=selected,
             branding=NewsletterBranding(),
         )
-    wordy = " ".join(["word"] * 40)
-    with pytest.raises(NewsletterCompositionError, match="40 words; the limit is 32"):
+    wordy = " ".join(["word"] * 60)
+    with pytest.raises(NewsletterCompositionError, match="69 words; the limit is 48"):
         compose_newsletter(
             digest,
             ScriptedWriter(
                 [
-                    copy_json("agents2026-ada", "agents2026-grace").replace(
-                        "A from-scratch loop.", wordy
-                    ),
-                    copy_json("agents2026-ada", "agents2026-grace").replace(
-                        "A from-scratch loop.", wordy
-                    ),
+                    copy_json(*selected).replace("A from-scratch loop.", wordy),
+                    copy_json(*selected).replace("A from-scratch loop.", wordy),
                 ]
             ),
+            selected=selected,
             branding=NewsletterBranding(),
         )
-    empty = WeeklyDigest(
-        week=week, projects=(evidence("agents2026-idle", "Idle", active=False),), highlight_count=4
+    with pytest.raises(NewsletterCompositionError, match="No project was selected"):
+        compose_newsletter(digest, ScriptedWriter([]), selected=(), branding=NewsletterBranding())
+    assert "Total projects this week: 4" in build_user_prompt(digest, selected=selected)
+
+
+def test_scoring_ranks_by_weighted_total_with_goal_gate_and_cooldown() -> None:
+    week = weeks()[0]
+    digest = digest_for(week, cooldown=frozenset({"agents2026-hal"}))
+    writer = ScriptedWriter(
+        [],
+        scores={
+            "agents2026-ada": score_json(goal_fit=6, interest=9, execution=7, rationale="Bold."),
+            "agents2026-grace": score_json(goal_fit=9, interest=5, execution=8),
+            "agents2026-hal": score_json(goal_fit=10, interest=10, execution=10),
+        },
     )
-    with pytest.raises(NewsletterCompositionError, match="No eligible project"):
-        compose_newsletter(empty, ScriptedWriter([]), branding=NewsletterBranding())
-    assert "Number of highlights to write: 2" in build_user_prompt(digest)
+
+    scores = score_projects(digest, writer, branding=NewsletterBranding(), workers=1)
+
+    assert [score.project_id for score in scores] == [
+        "agents2026-hal",
+        "agents2026-ada",
+        "agents2026-grace",
+    ]
+    assert scores[1].total == pytest.approx(0.4 * 6 + 0.4 * 9 + 0.2 * 7)
+    assert scores[1].rationale == "Bold." and scores[0].eligible is False
+    assert len(writer.score_prompts) == 3
+    assert "Project id: agents2026-ada" in "".join(writer.score_prompts)
+    assert "agents2026-idle" not in "".join(writer.score_prompts)
+    assert select_highlights(scores, count=2) == ("agents2026-ada", "agents2026-grace")
+    assert select_highlights(scores, count=1) == ("agents2026-ada",)
+
+    # A project that misses the assignment ranks behind every project that met it.
+    gated = ProjectScore(
+        project_id="agents2026-zed", interest=10, execution=10, goal_fit=2, total=6.8
+    )
+    modest = ProjectScore(
+        project_id="agents2026-yui", interest=4, execution=4, goal_fit=6, total=4.8
+    )
+    assert select_highlights((gated, modest), count=2) == ("agents2026-yui", "agents2026-zed")
+
+    # Broken model output for one project drops only that project.
+    broken = ScriptedWriter([], scores={"agents2026-ada": "not json"})
+    remaining = score_projects(digest, broken, branding=NewsletterBranding(), workers=1)
+    assert [score.project_id for score in remaining] == ["agents2026-grace", "agents2026-hal"]
+
+
+def test_image_discovery_and_candidate_filtering_are_deterministic() -> None:
+    week = weeks()[0]
+    site = "https://mitmedialab.github.io/agents2026-ada/"
+    anchors = [
+        {"href": site, "text": "Home"},
+        {"href": "https://github.com/mitmedialab/agents2026-ada/tree/main/week01", "text": "w1"},
+        {"href": f"{site}#builds", "text": "Builds"},
+        {"href": f"{site}week01.html", "text": "W01 Build an Agent"},
+        {"href": f"{site}weeks/week-01.html#top", "text": "Week 1 RollWorld"},
+        {"href": f"{site}week01.html", "text": "duplicate"},
+        {"href": f"{site}week10.html", "text": "Week 10"},
+        {"href": f"{site}final.html", "text": "Final project"},
+    ]
+    assert discover_week_pages(anchors, site_url=site, week=week) == [
+        f"{site}week01.html",
+        f"{site}weeks/week-01.html",
+    ]
+    assert discover_week_pages(anchors, site_url=site, week=weeks()[1]) == []
+    single_page = [
+        {"href": f"{site}#home", "text": "Journal"},
+        {"href": f"{site}#week-01", "text": "Explore the first week"},
+        {"href": f"{site}#final-project", "text": "Final project"},
+    ]
+    assert discover_week_pages(single_page, site_url=site, week=week) == []
+    assert discover_week_anchor(single_page, site_url=site, week=week) == f"{site}#week-01"
+    assert discover_week_anchor(anchors, site_url=site, week=week) is None
+
+    raw = [
+        {
+            "index": 0,
+            "tag": "img",
+            "src": f"{site}a/hero.webp",
+            "alt": "Agent",
+            "width": 998,
+            "height": 507,
+        },
+        {"index": 1, "tag": "svg", "src": "", "alt": "", "width": 640, "height": 400},
+        {
+            "index": 2,
+            "tag": "img",
+            "src": f"{site}a/icon.png",
+            "alt": "",
+            "width": 64,
+            "height": 64,
+        },
+        {
+            "index": 3,
+            "tag": "img",
+            "src": f"{site}a/strip.png",
+            "alt": "",
+            "width": 1200,
+            "height": 120,
+        },
+        {
+            "index": 4,
+            "tag": "img",
+            "src": f"{site}a/hero.webp",
+            "alt": "dup",
+            "width": 998,
+            "height": 507,
+        },
+        {"index": 5, "tag": "canvas", "src": "", "alt": "", "width": 800, "height": 600},
+        {
+            "index": 6,
+            "tag": "img",
+            "src": f"{site}a/hidden.png",
+            "alt": "",
+            "width": 800,
+            "height": 600,
+            "visible": False,
+        },
+        {"index": 7, "tag": "div", "src": "", "alt": "", "width": 800, "height": 600},
+        {
+            "index": 8,
+            "tag": "img",
+            "src": "data:image/png;base64,AAAA",
+            "alt": "",
+            "width": 500,
+            "height": 300,
+        },
+    ]
+    candidates = filter_candidates(raw, page_url=f"{site}week01.html")
+    assert [(c.index, c.tag) for c in candidates] == [
+        (0, "img"),
+        (5, "canvas"),
+        (1, "svg"),
+        (8, "img"),
+    ]
+    prompt = build_judge_prompt(context="Ada: bold loop", week=week, candidates=candidates)
+    assert '1. img 998x507 alt="Agent"' in prompt and "2. canvas 800x600" in prompt
+    assert "Build a minimal agent loop." in prompt
 
 
 def sample_issue(*, status: str = "draft") -> NewsletterIssue:
@@ -382,11 +549,11 @@ def sample_issue(*, status: str = "draft") -> NewsletterIssue:
                 Highlight(
                     project_id="agents2026-ada",
                     headline="Ada <script>alert(1)</script> loops",
-                    summary="A minimal agent loop built from scratch.",
-                    goal_link="It is exactly the from-scratch loop the brief asked for.",
+                    description=(
+                        "A minimal agent loop built from scratch. It is the loop asked for."
+                    ),
                 ),
             ),
-            closing="Everyone else is below.",
         ),
         roster=(
             ProjectLink(project_id="agents2026-ada", label="Ada", site_url="https://a.example/"),
@@ -403,6 +570,14 @@ def sample_issue(*, status: str = "draft") -> NewsletterIssue:
                 media_type="image/jpeg",
                 width=1200,
                 height=750,
+                kind="post_image",
+                source_url="https://a.example/assets/hero.webp",
+                page_url="https://a.example/week01.html",
+            ),
+        ),
+        scores=(
+            ProjectScore(
+                project_id="agents2026-ada", interest=8, execution=7, goal_fit=9, total=8.2
             ),
         ),
         model_id="test-model",
@@ -416,12 +591,14 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     issue = sample_issue()
 
     text = render_text(issue)
-    assert text.startswith(
-        "THE CLASS RUNTIME\nWeek 1 · class of Sep 15, 2026 · builds through Sep 21"
+    assert text.startswith("THE CLASS RUNTIME · ISSUE 01\nWeek one is in the loop.")
+    assert (
+        "Week 1 · Sep 15 \u2013 Sep 21, 2026\nTHE ASSIGNMENT: Build a minimal agent loop." in text
     )
     assert "MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026" in text
     assert "1. Ada <script>alert(1)</script> loops — Ada" in text
-    assert "Why it fits the brief: It is exactly" in text
+    assert "   A minimal agent loop built from scratch. It is the loop asked for." in text
+    assert "brief" not in text.casefold() and "scroll" not in text.casefold()
     assert "Open it: https://a.example/" in text
     assert (
         "ALL THE OTHER BUILDS THIS WEEK\n- Grace — https://g.example/?x=1&y=2\n- Hal (no site yet)"
@@ -436,7 +613,11 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "<script>" not in html
     assert "Ada &lt;script&gt;alert(1)&lt;/script&gt; loops" in html
     assert "<h1" in html and "Week one is in the loop." in html
+    assert "The assignment</p>" in html and ">Build a minimal agent loop.</p>" in html
+    assert "Week 1 · Sep 15 \u2013 Sep 21, 2026" in html
+    assert "Brief" not in html and "Keep scrolling" not in html
     assert 'src="2026-week01/agents2026-ada.jpg"' in html
+    assert 'alt="Ada &lt;script&gt;alert(1)&lt;/script&gt; loops"' in html
     assert 'src="cid:agents2026-ada"' in render_html(issue, image_src=cid_image_source)
     assert '<a href="https://a.example/"' in html
     assert 'href="https://g.example/?x=1&amp;y=2"' in html
@@ -570,15 +751,22 @@ class RecordingMailAdapter:
 
 
 @dataclass
-class FakeScreenshotter:
-    urls: list[str] = field(default_factory=list)
+class FakeImageFinder:
+    calls: list[tuple[str, int, str]] = field(default_factory=list)
     fail_for: set[str] = field(default_factory=set)
 
-    def __call__(self, url: str) -> SiteScreenshot:
-        self.urls.append(url)
-        if url in self.fail_for:
-            raise ScreenshotError("Screenshot failed (Timeout).")
-        return SiteScreenshot(data=b"\xff\xd8jpeg", media_type="image/jpeg", width=1200, height=750)
+    def find(self, *, site_url: str, week: CourseWeek, context: str) -> FoundImage | None:
+        self.calls.append((site_url, week.number, context))
+        if site_url in self.fail_for:
+            raise ScreenshotError("Site inspection failed (Timeout).")
+        return FoundImage(
+            shot=SiteScreenshot(
+                data=b"\xff\xd8jpeg", media_type="image/jpeg", width=1200, height=750
+            ),
+            kind="post_image",
+            page_url=f"{site_url}week01.html",
+            source_url=f"{site_url}assets/hero.webp",
+        )
 
 
 def make_service(
@@ -597,7 +785,7 @@ def make_service(
             limits=EvidenceLimits(workers=1),
         ),
         writer=writer,
-        screenshotter=FakeScreenshotter(),
+        image_finder=FakeImageFinder(),
         model_id="test-model",
         clock=lambda: datetime(2026, 9, 22, 15, 0, tzinfo=UTC),
     )
@@ -605,22 +793,35 @@ def make_service(
 
 
 def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path: Path) -> None:
-    writer = ScriptedWriter([copy_json("agents2026-ada", "agents2026-hal-9000")])
+    writer = ScriptedWriter(
+        [copy_json("agents2026-ada", "agents2026-hal-9000")],
+        scores={
+            "agents2026-ada": score_json(goal_fit=9, interest=8, execution=7, rationale="Bold."),
+            "agents2026-hal-9000": score_json(goal_fit=7, interest=6, execution=6),
+        },
+    )
     service, store = make_service(tmp_path, writer)
 
     issue = service.draft(as_of=date(2026, 9, 22))
 
     assert issue.issue_id == "2026-week01" and issue.status == "draft"
     assert issue.highlighted_project_ids() == ("agents2026-ada", "agents2026-hal-9000")
+    assert [score.project_id for score in issue.scores] == [
+        "agents2026-ada",
+        "agents2026-hal-9000",
+    ]
     assert [link.label for link in issue.other_projects()] == ["Grace", "Zed"]
     assert issue.model_id == "test-model" and issue.quote == PIONEER_QUOTES[0]
-    assert [(image.project_id, image.filename) for image in issue.images] == [
-        ("agents2026-ada", "agents2026-ada.jpg")
+    assert [(image.project_id, image.filename, image.kind) for image in issue.images] == [
+        ("agents2026-ada", "agents2026-ada.jpg", "post_image")
     ]
+    assert issue.images[0].source_url == (
+        "https://mitmedialab.github.io/agents2026-ada/assets/hero.webp"
+    )
     assert (tmp_path / "newsletter/issues/2026-week01/agents2026-ada.jpg").read_bytes() == (
         b"\xff\xd8jpeg"
     )
-    assert "Eligible project ids: agents2026-ada, agents2026-hal-9000" in writer.prompts[0]
+    assert "Featured projects, in order: agents2026-ada, agents2026-hal-9000" in writer.prompts[0]
     assert (tmp_path / "newsletter/issues/2026-week01.html").exists()
 
     async def scenario() -> None:
@@ -704,24 +905,29 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
             week2_catalog, repository_prefix="agents2026-", limits=EvidenceLimits(workers=1)
         ),
         writer=week2_writer,
-        screenshotter=FakeScreenshotter(
-            fail_for={"https://mitmedialab.github.io/agents2026-grace/"}
-        ),
+        image_finder=FakeImageFinder(fail_for={"https://mitmedialab.github.io/agents2026-grace/"}),
         clock=lambda: datetime(2026, 9, 29, 15, 0, tzinfo=UTC),
     )
     week2 = service2.draft()
     assert week2.issue_id == "2026-week02"
     assert week2.images == ()
     assert week2.highlighted_project_ids() == ("agents2026-grace",)
-    assert (
-        "Recently featured and therefore ineligible this week: agents2026-ada, agents2026-hal-9000"
-        in (week2_writer.prompts[0])
-    )
+    assert {score.project_id: score.eligible for score in week2.scores} == {
+        "agents2026-ada": False,
+        "agents2026-grace": True,
+    }
     assert week2.quote == PIONEER_QUOTES[1]
 
-    forced = ScriptedWriter([copy_json("agents2026-hal-9000", "agents2026-ada")])
+    forced = ScriptedWriter(
+        [copy_json("agents2026-hal-9000", "agents2026-ada")],
+        scores={"agents2026-hal-9000": score_json(9, 9, 9)},
+    )
     service3, _ = make_service(tmp_path, forced)
+    stale = tmp_path / "newsletter/issues/2026-week01/agents2026-stale.jpg"
+    stale.write_bytes(b"old")
     assert service3.draft(week_number=1, force=True).status == "draft"
+    assert not stale.exists()
+    assert (tmp_path / "newsletter/issues/2026-week01/agents2026-ada.jpg").exists()
 
     sendless = NewsletterService(settings=NewsletterSettings(), weeks=weeks(), store=store)
     with pytest.raises(NewsletterStateError, match="Drafting requires"):

@@ -1,14 +1,17 @@
-"""Turn a weekly digest into validated newsletter copy through a replaceable model writer.
+"""Model boundary for the newsletter: rubric scores, copy, and image choice.
 
-The model chooses which eligible builds to feature and writes the prose. Platform code
-decides eligibility, enforces the highlight count and cooldown, and owns every link.
+Platform code decides who is featured (see `score.py`), the order, every link, the quote,
+and the footer. The model writes the prose for the already-selected builds, scores
+projects one at a time, and picks among measured image candidates.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import re
-from typing import Protocol
+from collections.abc import Sequence
+from typing import Any, Protocol, cast
 
 from openai import OpenAI, OpenAIError
 from pydantic import SecretStr, ValidationError
@@ -29,31 +32,20 @@ NEWSLETTER_COPY_SCHEMA: dict[str, object] = {
                 "properties": {
                     "project_id": {"type": "string"},
                     "headline": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "goal_link": {"type": "string"},
+                    "description": {"type": "string"},
                 },
-                "required": ["project_id", "headline", "summary", "goal_link"],
+                "required": ["project_id", "headline", "description"],
                 "additionalProperties": False,
             },
         },
-        "closing": {"type": "string"},
     },
-    "required": ["opening", "highlights", "closing"],
+    "required": ["opening", "highlights"],
     "additionalProperties": False,
 }
 _LINK_LIKE = re.compile(r"https?://|www\.|@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", re.IGNORECASE)
 # Brevity is part of the format; the model is re-prompted with the exact overrun.
-WORD_LIMITS: dict[str, int] = {
-    "headline": 8,
-    "summary": 32,
-    "goal_link": 28,
-    "opening": 28,
-    "closing": 28,
-}
-
-
-def _word_count(value: str) -> int:
-    return len(value.split())
+WORD_LIMITS: dict[str, int] = {"headline": 8, "description": 48, "opening": 28}
+_CHOICE = re.compile(r'"choice"\s*:\s*(\d+)')
 
 
 class NewsletterCompositionError(RuntimeError):
@@ -61,13 +53,15 @@ class NewsletterCompositionError(RuntimeError):
 
 
 class NewsletterWriter(Protocol):
-    """Returns JSON text matching `schema`; the platform parses and validates it."""
+    """Text and image-choice calls; the platform parses and validates every response."""
 
     def write(self, *, system_prompt: str, user_prompt: str, schema: dict[str, object]) -> str: ...
 
+    def judge_images(self, *, prompt: str, images: Sequence[bytes]) -> int: ...
+
 
 class OpenAINewsletterWriter:
-    """Chat Completions writer that keeps the API key inside this process."""
+    """OpenAI writer that keeps the API key inside this process."""
 
     def __init__(
         self,
@@ -101,6 +95,33 @@ class OpenAINewsletterWriter:
             raise NewsletterCompositionError("The model returned no newsletter copy.")
         return content
 
+    def judge_images(self, *, prompt: str, images: Sequence[bytes]) -> int:
+        content: list[dict[str, object]] = [{"type": "input_text", "text": prompt}]
+        for index, png in enumerate(images, start=1):
+            encoded = base64.b64encode(png).decode("ascii")
+            content.append({"type": "input_text", "text": f"Image {index}:"})
+            content.append(
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/png;base64,{encoded}",
+                    "detail": "low",
+                }
+            )
+        try:
+            response = self._client.responses.create(
+                model=self.model_id,
+                input=cast(Any, [{"role": "user", "content": content}]),
+                store=False,
+            )
+        except OpenAIError as error:
+            raise NewsletterCompositionError(
+                f"The image choice request failed ({type(error).__name__})."
+            ) from error
+        match = _CHOICE.search(response.output_text)
+        if match is None:
+            raise NewsletterCompositionError("The model returned no image choice.")
+        return int(match.group(1))
+
 
 def build_system_prompt(branding: NewsletterBranding) -> str:
     return (
@@ -111,17 +132,15 @@ def build_system_prompt(branding: NewsletterBranding) -> str:
         "factual claim grounded in the evidence you are given. Never invent features, results, "
         "or names. Refer to each student by the label provided.\n\n"
         "Rules:\n"
-        "- Feature exactly the requested number of highlights, each a different eligible project.\n"
-        "- Prefer builds that are complete, documented, creative, and clearly meet the week's "
-        "goal. Never feature a project marked ineligible.\n"
-        "- Brevity is the format. Each highlight has: a pun-friendly headline of at most six "
-        "words; a summary of exactly one sentence (at most 28 words) saying what the build is; "
-        "and a goal_link of exactly one sentence (at most 24 words) stating specifically how it "
-        "relates to the week's assignment goal. A screenshot of the build is shown above the "
-        "text, so do not describe what the site looks like.\n"
+        "- Course staff already chose the featured builds and their order. Write one highlight "
+        "per listed project, in the given order, using the given project ids.\n"
+        "- Each highlight has a pun-friendly headline of at most six words and a description "
+        "of exactly two sentences (at most 40 words in total): the first says what the build "
+        "is and what makes it interesting; the second says specifically how it does what this "
+        "week's assignment asked. An image of the build appears above the text, so do not "
+        "describe what it looks like.\n"
         "- The opening is one sentence (at most 24 words) that reads like a headline for the "
-        "week; the closing is one sentence (at most 24 words) handing off to the full list of "
-        "builds and the quote.\n"
+        "week.\n"
         "- Write plain text only: no Markdown, no bullet characters, no URLs, no email "
         "addresses, no emoji. Links, the full project list, the quote, and the footer are "
         "added by the platform.\n"
@@ -129,7 +148,7 @@ def build_system_prompt(branding: NewsletterBranding) -> str:
     )
 
 
-def _describe_project(project: ProjectEvidence, *, status: str) -> str:
+def describe_project(project: ProjectEvidence, *, status: str) -> str:
     lines = [f"### {project.project_id} (label: {project.label}) — {status}"]
     lines.append(f"deployed site: {project.site_url or 'none'}")
     lines.append(
@@ -154,37 +173,32 @@ def _describe_project(project: ProjectEvidence, *, status: str) -> str:
     return "\n".join(lines)
 
 
-def build_user_prompt(digest: WeeklyDigest, *, feedback: tuple[str, ...] = ()) -> str:
+def build_user_prompt(
+    digest: WeeklyDigest,
+    *,
+    selected: Sequence[str],
+    feedback: tuple[str, ...] = (),
+) -> str:
     week = digest.week
-    eligible = set(digest.eligible_project_ids())
-    target = digest.target_highlight_count()
+    by_id = {project.project_id: project for project in digest.projects}
     sections = [
         f"# Week {week.number} (class on {week.class_date.isoformat()})",
         f"Lecture topic: {week.topic}",
         f"Hands-on assignment goal for the week: {week.tutorial}",
         f"Build window: {week.starts_at.date().isoformat()} to {week.ends_at.date().isoformat()}",
-        f"Number of highlights to write: {target}",
-        "Eligible project ids: " + (", ".join(sorted(eligible)) or "none"),
+        "Featured projects, in order: " + ", ".join(selected),
+        f"Total projects this week: {len(digest.projects)}",
     ]
-    if digest.cooldown_project_ids:
-        sections.append(
-            "Recently featured and therefore ineligible this week: "
-            + ", ".join(sorted(digest.cooldown_project_ids))
-        )
     if feedback:
         sections.append(
             "Your previous attempt was rejected for these reasons; fix all of them:\n"
             + "\n".join(f"- {item}" for item in feedback)
         )
-    sections.append("## Evidence per project")
-    for project in digest.projects:
-        if project.project_id in eligible:
-            status = "ELIGIBLE"
-        elif project.project_id in digest.cooldown_project_ids:
-            status = "INELIGIBLE (featured recently)"
-        else:
-            status = "INELIGIBLE (no build activity this week)"
-        sections.append(_describe_project(project, status=status))
+    sections.append("## Evidence for the featured projects")
+    for position, project_id in enumerate(selected, start=1):
+        project = by_id.get(project_id)
+        if project is not None:
+            sections.append(describe_project(project, status=f"FEATURED #{position}"))
     return "\n\n".join(sections)
 
 
@@ -201,24 +215,23 @@ def parse_copy(raw: str) -> NewsletterCopy:
         ) from error
 
 
-def validate_copy(copy: NewsletterCopy, digest: WeeklyDigest) -> tuple[str, ...]:
+def _word_count(value: str) -> int:
+    return len(value.split())
+
+
+def validate_copy(copy: NewsletterCopy, *, selected: Sequence[str]) -> tuple[str, ...]:
     """Deterministic checks the model cannot override; returns problems to fix."""
 
     problems: list[str] = []
-    eligible = set(digest.eligible_project_ids())
-    target = digest.target_highlight_count()
-    if len(copy.highlights) != target:
-        problems.append(f"expected exactly {target} highlights, got {len(copy.highlights)}")
-    seen: set[str] = set()
+    written = [highlight.project_id for highlight in copy.highlights]
+    if written != list(selected):
+        problems.append(
+            "highlights must cover exactly these project ids in this order: "
+            + ", ".join(selected)
+            + f" (got: {', '.join(written) or 'none'})"
+        )
     for highlight in copy.highlights:
-        if highlight.project_id in seen:
-            problems.append(f"{highlight.project_id} is highlighted more than once")
-        seen.add(highlight.project_id)
-        if highlight.project_id in digest.cooldown_project_ids:
-            problems.append(f"{highlight.project_id} was featured recently and is ineligible")
-        elif highlight.project_id not in eligible:
-            problems.append(f"{highlight.project_id} is not an eligible project id")
-        for field_name in ("headline", "summary", "goal_link"):
+        for field_name in ("headline", "description"):
             value = getattr(highlight, field_name)
             if _LINK_LIKE.search(value):
                 problems.append(f"{highlight.project_id} {field_name} must not contain links")
@@ -227,15 +240,12 @@ def validate_copy(copy: NewsletterCopy, digest: WeeklyDigest) -> tuple[str, ...]
                     f"{highlight.project_id} {field_name} has {_word_count(value)} words; "
                     f"the limit is {WORD_LIMITS[field_name]}"
                 )
-    for field_name in ("opening", "closing"):
-        value = getattr(copy, field_name)
-        if _LINK_LIKE.search(value):
-            problems.append(f"{field_name} must not contain links or addresses")
-        if _word_count(value) > WORD_LIMITS[field_name]:
-            problems.append(
-                f"{field_name} has {_word_count(value)} words; "
-                f"the limit is {WORD_LIMITS[field_name]}"
-            )
+    if _LINK_LIKE.search(copy.opening):
+        problems.append("opening must not contain links or addresses")
+    if _word_count(copy.opening) > WORD_LIMITS["opening"]:
+        problems.append(
+            f"opening has {_word_count(copy.opening)} words; the limit is {WORD_LIMITS['opening']}"
+        )
     return tuple(problems)
 
 
@@ -243,23 +253,24 @@ def compose_newsletter(
     digest: WeeklyDigest,
     writer: NewsletterWriter,
     *,
+    selected: Sequence[str],
     branding: NewsletterBranding,
     max_attempts: int = 2,
 ) -> NewsletterCopy:
     """Ask the writer for copy and re-prompt once with concrete problems if it breaks a rule."""
 
-    if digest.target_highlight_count() == 0:
-        raise NewsletterCompositionError("No eligible project has build activity this week.")
+    if not selected:
+        raise NewsletterCompositionError("No project was selected for highlights.")
     system_prompt = build_system_prompt(branding)
     feedback: tuple[str, ...] = ()
     for _ in range(max(1, max_attempts)):
         raw = writer.write(
             system_prompt=system_prompt,
-            user_prompt=build_user_prompt(digest, feedback=feedback),
+            user_prompt=build_user_prompt(digest, selected=selected, feedback=feedback),
             schema=NEWSLETTER_COPY_SCHEMA,
         )
         copy = parse_copy(raw)
-        feedback = validate_copy(copy, digest)
+        feedback = validate_copy(copy, selected=selected)
         if not feedback:
             return copy
     raise NewsletterCompositionError("The model copy broke platform rules: " + "; ".join(feedback))

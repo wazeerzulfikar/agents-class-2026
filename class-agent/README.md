@@ -163,9 +163,10 @@ prefix, and exclusions are enforced in platform code. See
 Instructors can produce the weekly class newsletter, *The Class Runtime*, with
 `uv run python -m course_server.newsletter draft`. The command reads every course repository
 through the same read-only GitHub integration, gathers the finished week's `weekly_builds/weekNN/`
-documents, commits, and deployed site text, asks the configured model for four short highlights
-tied to that week's hands-on goal, captures a screenshot of each highlighted site with headless
-Chromium, and writes a draft under `var/newsletter/` as JSON plus `.txt` and `.html` renderings. Nothing is emailed until an instructor reviews the draft and runs the separate
+documents, commits, and deployed site text, scores every project against a fixed rubric
+(interest, execution, and whether it did what the week asked), selects the top four in code,
+pulls each featured student's own post image with headless Chromium, and writes a draft under
+`var/newsletter/` as JSON plus `.txt` and `.html` renderings. Nothing is emailed until an instructor reviews the draft and runs the separate
 `send` command, which requires a typed `SEND` confirmation or `--yes`. Platform code owns the
 project links, the full project list, the closing quote, the footer, and the rule that students
 featured in recent issues are not featured again. See [docs/NEWSLETTER.md](docs/NEWSLETTER.md).

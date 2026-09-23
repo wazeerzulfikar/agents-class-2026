@@ -56,6 +56,17 @@ class FileNewsletterStore:
         path.write_bytes(data)
         return path
 
+    def clear_images(self, issue_id: str) -> None:
+        """Remove a previous draft's images so a redraft leaves no stale files behind."""
+
+        self.paths_for(issue_id)
+        directory = self.issues_directory / issue_id
+        if not directory.is_dir() or directory.is_symlink():
+            return
+        for path in directory.iterdir():
+            if path.is_file() and not path.is_symlink() and _IMAGE_FILENAME.fullmatch(path.name):
+                path.unlink()
+
     def load_image(self, issue_id: str, filename: str) -> bytes:
         path = self.image_path(issue_id, filename)
         if not path.is_file() or path.is_symlink():

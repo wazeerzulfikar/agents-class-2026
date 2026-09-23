@@ -161,18 +161,28 @@ class WeeklyDigest(NewsletterModel):
 class Highlight(NewsletterModel):
     project_id: ProjectId
     headline: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
-    summary: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=600)]
-    goal_link: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=400)
+    description: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=700)
     ]
 
 
 class NewsletterCopy(NewsletterModel):
-    """Model-authored prose; platform code owns links, ordering, quote, and footer."""
+    """Model-authored prose; platform code owns selection, links, ordering, quote, and footer."""
 
     opening: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=900)]
     highlights: tuple[Highlight, ...] = Field(max_length=8)
-    closing: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+
+
+class ProjectScore(NewsletterModel):
+    """Rubric scores for one project's week, produced by the model and ranked in code."""
+
+    project_id: ProjectId
+    interest: int = Field(ge=0, le=10)
+    execution: int = Field(ge=0, le=10)
+    goal_fit: int = Field(ge=0, le=10)
+    total: float = Field(ge=0, le=10)
+    rationale: Annotated[str, StringConstraints(strip_whitespace=True, max_length=600)] = ""
+    eligible: bool = True
 
 
 class PioneerQuote(NewsletterModel):
@@ -195,6 +205,9 @@ class HighlightImage(NewsletterModel):
     media_type: Literal["image/jpeg", "image/png"]
     width: int = Field(ge=1)
     height: int = Field(ge=1)
+    kind: Literal["post_image", "screenshot"] = "screenshot"
+    source_url: str | None = None
+    page_url: str | None = None
 
     @property
     def content_id(self) -> str:
@@ -219,6 +232,7 @@ class NewsletterIssue(NewsletterModel):
     body: NewsletterCopy
     roster: tuple[ProjectLink, ...]
     quote: PioneerQuote
+    scores: tuple[ProjectScore, ...] = ()
     images: tuple[HighlightImage, ...] = ()
     model_id: str | None = None
     status: Literal["draft", "sent"] = "draft"

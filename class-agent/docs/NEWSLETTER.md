@@ -8,25 +8,47 @@ week, shows the draft to the instructor, and sends email only after an explicit 
 
 Every issue follows the same skimmable shape:
 
-1. A short opening written for the week.
-2. Four highlights (configurable). Each one names the student, gives one or two lines on what the
-   build is, and one line on specifically how it relates to that week's hands-on assignment goal,
-   followed by a link to the deployed project site.
-3. A closing line.
-4. Every other course project, listed with its deployed site link.
-5. A closing quote from an AI or computing pioneer.
-6. The course line (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`) and a link
+1. A one-sentence opening written for the week, the week's dates, and the assignment goal.
+2. Four highlights (configurable). Each one shows an image from the student's own post, names
+   the student, and gives a headline plus two sentences: what the build is and what makes it
+   interesting, then specifically how it does what the assignment asked. A link opens the site.
+3. Every other course project, listed with its deployed site link.
+4. A closing quote from an AI or computing pioneer.
+5. The course line (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`) and a link
    to the class website, `https://cognitive-agents.media.mit.edu`.
 
 The email subject is `The Class Runtime from MAS.S60`. Each message is sent as plain text with an
 HTML alternative. The HTML follows the course site's look: black ground, ivory Helvetica display
-text, small letter-spaced monospace labels, muted secondary text, and fine rules. Each highlight
-opens with a screenshot of the student's deployed site, captured at draft time with headless
-Chromium (the same Playwright dependency the agent's browser uses; `BROWSER_EXECUTABLE_PATH` is
-honored when it exists, otherwise Playwright's bundled Chromium). Screenshots are downscaled to
-1200 pixels wide, encoded as JPEG, stored beside the issue, and embedded in the email as inline
-`cid:` images so they need no external hosting. A site that cannot be captured is skipped and
-noted in the draft log; the highlight is still written.
+text, small letter-spaced monospace labels, muted secondary text, and fine rules.
+
+## How highlights are chosen
+
+Every active project is scored, one model call each, against a fixed rubric from its bounded
+evidence: `interest` (how interesting the idea and the result are), `execution` (complete,
+working, documented), and `goal_fit` (did the student properly do what the week asked). Platform
+code computes the total (goal fit 40%, interest 40%, execution 20%), ranks every project that met
+the goal-fit floor ahead of every project that did not, excludes students featured in the last
+`NEWSLETTER_HIGHLIGHT_COOLDOWN_ISSUES` sent issues, breaks ties deterministically, and takes the
+top `NEWSLETTER_HIGHLIGHT_COUNT`. The model then writes copy for exactly those projects in that
+order; a response that changes the set or order is re-prompted once and then rejected. The full
+scoreboard with rationales is stored in the issue and printed by `draft` and `show`, so the choice
+is inspectable.
+
+## Highlight images
+
+For each featured build the finder opens the student's site in headless Chromium (the same
+Playwright dependency the agent's browser uses; `BROWSER_EXECUTABLE_PATH` is honored when it
+exists), follows same-site links that name the week to the student's post, and measures the visual
+elements rendered there: images, SVG figures, canvases, and videos. Visible elements at least 300
+by 160 CSS pixels with a sane aspect ratio are candidates, largest first, and each is captured at
+2x as its own element screenshot, so vector figures and live canvases work as well as photos. The
+model picks the capture that best represents the build (rendered results, demos, diagrams over
+logos, icons, and portraits). The chosen capture is flattened onto black, downscaled to 1200 pixels
+wide, encoded as JPEG, stored beside the issue with its source and page URL, and embedded in the
+email as an inline `cid:` image. Root-page visuals are considered only when the site has no week post. When a post
+has no usable visual, the week page (or, on single-page sites, the week section) is captured
+instead and recorded as a screenshot. A site that cannot
+be inspected is skipped and noted in the draft log; the highlight is still written.
 
 ## Where each decision lives
 
@@ -35,9 +57,10 @@ noted in the draft log; the highlight is still written.
 | Which week is "last week", and its assignment goal | Platform code, parsed from `shared/course/schedule/schedule.md` |
 | Which repositories exist and what can be read | The existing read-only GitHub catalog (`mitmedialab/agents2026-*`) |
 | Which projects are eligible to be featured | Platform code: the project changed something during the week and was not featured in the last `NEWSLETTER_HIGHLIGHT_COOLDOWN_ISSUES` sent issues |
-| Which eligible builds to feature and the prose | The configured model, from bounded evidence |
-| Highlight count, uniqueness, and the cooldown | Validated in code; a violating response is re-prompted once with the concrete problems, then rejected |
-| Links, project list, quote, footer, HTML escaping | Platform rendering code; the model cannot add links or addresses |
+| Rubric scores per project, the prose, the image choice among measured candidates | The configured model, from bounded evidence |
+| Weights, goal-fit floor, ranking, cooldown, final selection and order | Platform code (`score.py`) |
+| Highlight set/order, brevity limits, link-free prose | Validated in code; a violating response is re-prompted once with the concrete problems, then rejected |
+| Links, project list, quote, footer, HTML escaping, image fetching and re-encoding | Platform code; the model cannot add links, addresses, or image URLs |
 | Whether anything is emailed, and to whom | The instructor, at `send` time |
 
 The model receives only repository names, derived labels, deployed site URLs, commit subjects,
@@ -110,7 +133,8 @@ draft only if nobody received it; re-running `send` on a sent issue is refused.
 
 ## Cost and failure behavior
 
-Each draft makes one model request (two if the first response breaks a rule) with roughly the
-size of the collected evidence, and a few hundred GitHub reads across the class. Provider failures
+Each draft makes one scoring request per active project, one image-choice request per featured
+build with candidates, and one copy request (two if the first response breaks a rule), plus a few
+hundred GitHub reads across the class and one headless browser session per featured build. Provider failures
 surface as sanitized errors without response bodies. No newsletter code runs inside the API
 process or the Course Agent runtime.
