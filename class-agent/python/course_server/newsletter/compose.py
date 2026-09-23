@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+import httpx
 from openai import OpenAI, OpenAIError
 from pydantic import SecretStr, ValidationError
 
@@ -37,10 +38,20 @@ EDITORIAL_SCHEMA: dict[str, object] = {
         },
         "editorial": {
             "type": "string",
-            "description": "About 200 words on how the class did, in two or three paragraphs.",
+            "description": (
+                "About 100 words on how the class did, in one or two short paragraphs. "
+                "Reference links, if any, use Markdown [text](https://url) syntax."
+            ),
+        },
+        "quote_choice": {
+            "type": "integer",
+            "description": (
+                "1-based index of the most inspiring candidate quote from a student post, "
+                "or 0 if none is good enough to close the issue."
+            ),
         },
     },
-    "required": ["headline", "editorial"],
+    "required": ["headline", "editorial", "quote_choice"],
     "additionalProperties": False,
 }
 HIGHLIGHTS_SCHEMA: dict[str, object] = {
@@ -64,12 +75,49 @@ HIGHLIGHTS_SCHEMA: dict[str, object] = {
     "additionalProperties": False,
 }
 _LINK_LIKE = re.compile(r"https?://|www\.|@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", re.IGNORECASE)
+MARKDOWN_LINK = re.compile(r"\[([^\]\n]{1,120})\]\((https://[^\s)]+)\)")
+_PARTICIPATION_COUNT = re.compile(
+    r"\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|"
+    r"fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|dozen|dozens|half|most|"
+    r"majority)\s+(of\s+you|students?|submissions?|projects?|people|builds?|posts?|"
+    r"of\s+the\s+class)\b",
+    re.IGNORECASE,
+)
+MAX_EDITORIAL_LINKS = 2
 # Staff vocabulary that must not leak into student-facing copy. Kept narrow: words like
 # "score" are legitimate when describing a build that scores things.
 _BANNED_WORDS = re.compile(r"\b(brief|rubric)\b", re.IGNORECASE)
 # Brevity is part of the format; the model is re-prompted with the exact overrun.
 WORD_LIMITS: dict[str, int] = {"headline": 12, "description": 48}
-EDITORIAL_WORDS = (160, 230)
+EDITORIAL_WORDS = (80, 125)
+
+
+class LinkChecker(Protocol):
+    """Confirms a reference URL actually resolves before it goes into the issue."""
+
+    def __call__(self, url: str) -> bool: ...
+
+
+def link_resolves(url: str, *, timeout_seconds: float = 10.0) -> bool:
+    try:
+        with httpx.Client(
+            follow_redirects=True, max_redirects=5, timeout=timeout_seconds
+        ) as client:
+            response = client.head(url)
+            if response.status_code in {403, 405}:
+                response = client.get(url)
+            return response.status_code < 400
+    except httpx.HTTPError:
+        return False
+
+
+@dataclass(frozen=True)
+class EditorialDraft:
+    headline: str
+    editorial: str
+    quote_choice: int
+
+
 _CHOICE = re.compile(r'"choice"\s*:\s*(\d+)')
 
 
@@ -191,15 +239,20 @@ def build_editorial_system_prompt(branding: NewsletterBranding) -> str:
     return (
         f"{EDITORIAL_MARKER} {_voice(branding)}\n\n"
         "Task: from the staff notes on every student's submission, write the issue's headline "
-        "and editorial.\n"
+        "and editorial, and pick the closing quote.\n"
         "- headline: at most 12 words, a pun or playful turn on this week's assignment itself "
         "(what the class was asked to build), not a generic line about highlights.\n"
-        "- editorial: about 200 words (between 160 and 230) in two or three short paragraphs "
-        "on how everyone did: what generally went well across the class, what people commonly "
-        "struggled with or left unfinished, and one or two patterns worth noticing. Speak to "
-        "the class directly and generously; name students only for genuinely notable positive "
-        "points, never to single out weak work. Do not list projects; the highlights and the "
-        "full list follow separately."
+        "- editorial: about 100 words (between 85 and 120), one or two short paragraphs, "
+        "speaking to the class directly. First, what generally went well across the class. "
+        "Then the common blockers, framed constructively in terms of the week's learning goals: "
+        "what the difficulty teaches and what to practice next, not a complaint. Never name a "
+        "student. Never state how many people submitted, posted, or struggled; no counts or "
+        "proportions of the class at all. Do not mention the featured projects; the highlights "
+        "and the full list follow separately. When a specific reference genuinely helps (a "
+        "paper, documentation, or tutorial you are certain exists), add at most two links using "
+        "Markdown [text](https://url) syntax; otherwise add none. Never invent a URL.\n"
+        "- quote_choice: from the candidate quotes taken from students' own posts, choose the "
+        "one that would most inspire the class as a closing line, or 0 if none is good enough."
     )
 
 
@@ -255,41 +308,57 @@ def _week_header(digest: WeeklyDigest) -> list[str]:
     ]
 
 
+def quote_candidates(
+    digest: WeeklyDigest, scores: Sequence[ProjectScore]
+) -> tuple[tuple[str, str, str], ...]:
+    """(project_id, label, verified quote) for every student whose post offered one."""
+
+    labels = {project.project_id: project.label for project in digest.projects}
+    return tuple(
+        (score.project_id, labels.get(score.project_id, score.project_id), score.quote)
+        for score in scores
+        if score.quote
+    )
+
+
 def build_editorial_user_prompt(
     digest: WeeklyDigest,
     scores: Sequence[ProjectScore],
     *,
     feedback: tuple[str, ...] = (),
 ) -> str:
-    labels = {project.project_id: project.label for project in digest.projects}
+    """Notes are anonymized and uncounted so the editorial cannot name or tally students."""
+
     scored = {score.project_id: score for score in scores}
     active = [project for project in digest.projects if project.active]
-    quiet = [project for project in digest.projects if not project.active]
     sections = _week_header(digest)
-    sections.append(
-        f"{len(digest.projects)} students; {len(active)} posted work this week; "
-        f"{len(quiet)} have nothing beyond the starter template yet."
-    )
     if feedback:
         sections.append(
             "Your previous attempt was rejected for these reasons; fix all of them:\n"
             + "\n".join(f"- {item}" for item in feedback)
         )
-    sections.append("## Staff notes per student (label: what they built / went well / struggled)")
-    for project in active:
+    sections.append(
+        "## Staff notes per submission (anonymous: what was built / went well / struggled)"
+    )
+    for index, project in enumerate(active, start=1):
         score = scored.get(project.project_id)
         if score is None:
-            sections.append(f"- {labels[project.project_id]}: submission could not be assessed.")
             continue
         sections.append(
-            f"- {labels[project.project_id]} (assessment {score.total:.1f}/10): "
-            f"built: {score.built or 'unclear'} / went well: {score.went_well or 'n/a'} / "
-            f"struggled: {score.struggled or 'n/a'}"
+            f"- Submission {index}: built: {score.built or 'unclear'} / "
+            f"went well: {score.went_well or 'n/a'} / struggled: {score.struggled or 'n/a'}"
         )
-    if quiet:
+    candidates = quote_candidates(digest, scores)
+    if candidates:
         sections.append(
-            "Nothing posted yet: " + ", ".join(labels[item.project_id] for item in quiet)
+            "## Candidate closing quotes, verbatim from students' own posts\n"
+            + "\n".join(
+                f'{index}. "{text}" \u2014 {label}'
+                for index, (_, label, text) in enumerate(candidates, start=1)
+            )
         )
+    else:
+        sections.append("No candidate quotes were found this week; answer quote_choice 0.")
     return "\n\n".join(sections)
 
 
@@ -340,17 +409,36 @@ def _text_problems(value: str, *, field_name: str, owner: str = "") -> list[str]
     return problems
 
 
-def validate_editorial(headline: str, editorial: str) -> tuple[str, ...]:
+def validate_editorial(
+    headline: str,
+    editorial: str,
+    *,
+    names: Sequence[str] = (),
+    link_checker: LinkChecker | None = None,
+) -> tuple[str, ...]:
     problems = _text_problems(headline, field_name="headline")
-    problems += _text_problems(editorial, field_name="editorial")
     if _word_count(headline) > WORD_LIMITS["headline"]:
         problems.append(
             f"headline has {_word_count(headline)} words; the limit is {WORD_LIMITS['headline']}"
         )
+    links = MARKDOWN_LINK.findall(editorial)
+    prose = MARKDOWN_LINK.sub(r"\1", editorial)
+    problems += _text_problems(prose, field_name="editorial")
     low, high = EDITORIAL_WORDS
-    count = _word_count(editorial)
+    count = _word_count(prose)
     if not low <= count <= high:
         problems.append(f"editorial has {count} words; write between {low} and {high}")
+    for name in names:
+        if len(name) >= 4 and re.search(rf"\b{re.escape(name)}\b", prose, re.IGNORECASE):
+            problems.append(f'editorial must not name students (found "{name}")')
+    tally = _PARTICIPATION_COUNT.search(prose)
+    if tally is not None:
+        problems.append(f'editorial must not count participation (found "{tally.group(0)}")')
+    if len(links) > MAX_EDITORIAL_LINKS:
+        problems.append(f"editorial has {len(links)} links; the limit is {MAX_EDITORIAL_LINKS}")
+    for _, url in links:
+        if link_checker is not None and not link_checker(url):
+            problems.append(f"the link {url} does not resolve; remove it or use a real one")
     return tuple(problems)
 
 
@@ -397,11 +485,14 @@ def compose_editorial(
     writer: NewsletterWriter,
     *,
     branding: NewsletterBranding,
-    max_attempts: int = 2,
-) -> tuple[str, str]:
-    """Headline and editorial from the whole class's notes; re-prompted once on rule breaks."""
+    link_checker: LinkChecker | None = link_resolves,
+    max_attempts: int = 3,
+) -> EditorialDraft:
+    """Headline, editorial, and quote choice from the class's notes; re-prompted on rule breaks."""
 
     system_prompt = build_editorial_system_prompt(branding)
+    names = [project.label for project in digest.projects]
+    candidate_count = len(quote_candidates(digest, scores))
     feedback: tuple[str, ...] = ()
     for _ in range(max(1, max_attempts)):
         payload = _parse(
@@ -413,11 +504,15 @@ def compose_editorial(
         )
         headline = str(payload.get("headline", "")).strip()
         editorial = str(payload.get("editorial", "")).strip()
+        raw_choice = payload.get("quote_choice", 0)
+        choice = raw_choice if isinstance(raw_choice, int) else 0
         if not headline or not editorial:
             raise NewsletterCompositionError("The model returned an empty headline or editorial.")
-        feedback = validate_editorial(headline, editorial)
+        feedback = validate_editorial(headline, editorial, names=names, link_checker=link_checker)
+        if not 0 <= choice <= candidate_count:
+            feedback += (f"quote_choice must be between 0 and {candidate_count}",)
         if not feedback:
-            return headline, editorial
+            return EditorialDraft(headline=headline, editorial=editorial, quote_choice=choice)
     raise NewsletterCompositionError("The editorial broke platform rules: " + "; ".join(feedback))
 
 
@@ -467,7 +562,15 @@ def compose_newsletter(
     *,
     selected: Sequence[str],
     branding: NewsletterBranding,
-) -> NewsletterCopy:
-    headline, editorial = compose_editorial(digest, scores, writer, branding=branding)
+    link_checker: LinkChecker | None = link_resolves,
+) -> tuple[NewsletterCopy, tuple[str, str, str] | None]:
+    """The issue's copy plus the chosen student quote as (project_id, label, text), if any."""
+
+    draft = compose_editorial(digest, scores, writer, branding=branding, link_checker=link_checker)
     highlights = compose_highlights(digest, writer, selected=selected, branding=branding)
-    return NewsletterCopy(headline=headline, editorial=editorial, highlights=highlights)
+    candidates = quote_candidates(digest, scores)
+    chosen = candidates[draft.quote_choice - 1] if draft.quote_choice > 0 else None
+    return (
+        NewsletterCopy(headline=draft.headline, editorial=draft.editorial, highlights=highlights),
+        chosen,
+    )

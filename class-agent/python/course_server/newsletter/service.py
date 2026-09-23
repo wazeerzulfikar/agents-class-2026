@@ -11,7 +11,13 @@ from pydantic import EmailStr, ValidationError
 from course_server.mail.models import InlineImage, MailAdapter, OutboundMail
 
 from .collect import WeeklyEvidenceCollector
-from .compose import NewsletterCompositionError, NewsletterWriter, compose_newsletter
+from .compose import (
+    LinkChecker,
+    NewsletterCompositionError,
+    NewsletterWriter,
+    compose_newsletter,
+    link_resolves,
+)
 from .images import HighlightImageFinder
 from .models import (
     CourseWeek,
@@ -69,6 +75,7 @@ class NewsletterService:
         collector: WeeklyEvidenceCollector | None = None,
         writer: NewsletterWriter | None = None,
         image_finder: HighlightImageFinder | None = None,
+        link_checker: LinkChecker | None = link_resolves,
         quotes: tuple[PioneerQuote, ...] = PIONEER_QUOTES,
         model_id: str | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -79,6 +86,7 @@ class NewsletterService:
         self._collector = collector
         self._writer = writer
         self._image_finder = image_finder
+        self._link_checker = link_checker
         self._store = store
         self._quotes = quotes
         self._model_id = model_id
@@ -130,9 +138,32 @@ class NewsletterService:
             raise NewsletterCompositionError("No eligible project could be scored this week.")
         self._log("Selected: " + ", ".join(selected))
         images = self._find_images(issue_id, selected, evidence, week, scores)
-        copy = compose_newsletter(
-            digest, scores, self._writer, selected=selected, branding=self._settings.branding
+        copy, student_quote = compose_newsletter(
+            digest,
+            scores,
+            self._writer,
+            selected=selected,
+            branding=self._settings.branding,
+            link_checker=self._link_checker,
         )
+        sites = {item.project_id: item.site_url for item in evidence}
+        if student_quote is not None:
+            project_id, label, text = student_quote
+            quote = PioneerQuote(
+                text=text,
+                author=label,
+                source=f"from their week {week.number} post",
+                url=sites.get(project_id),
+                kind="student",
+            )
+            self._log(f"Closing quote: {label}'s own words.")
+        else:
+            quote = choose_quote(
+                week_number=week.number,
+                used_texts=self._store.used_quote_texts(),
+                quotes=self._quotes,
+            )
+            self._log("Closing quote: no student quote qualified; using the pioneer rotation.")
         issue = NewsletterIssue(
             issue_id=issue_id,
             week=week,
@@ -148,11 +179,7 @@ class NewsletterService:
                 )
                 for item in evidence
             ),
-            quote=choose_quote(
-                week_number=week.number,
-                used_texts=self._store.used_quote_texts(),
-                quotes=self._quotes,
-            ),
+            quote=quote,
             scores=scores,
             images=images,
             model_id=self._model_id,

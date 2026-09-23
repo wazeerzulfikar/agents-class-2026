@@ -32,6 +32,8 @@ from course_server.newsletter import (
     NewsletterSettings,
     NewsletterStateError,
     NewsletterStoreError,
+    PioneerQuote,
+    ProjectDocument,
     ProjectEvidence,
     ProjectLink,
     ProjectScore,
@@ -41,23 +43,19 @@ from course_server.newsletter import (
     WeeklyEvidenceCollector,
     build_editorial_user_prompt,
     build_highlights_user_prompt,
-    build_judge_prompt,
     choose_quote,
     cid_image_source,
     compose_editorial,
     compose_highlights,
     compose_newsletter,
-    discover_week_anchor,
-    discover_week_pages,
     encode_jpeg,
-    filter_candidates,
     parse_schedule,
     project_label,
     render_html,
     render_text,
-    score_projects,
-    select_highlights,
     select_week,
+    validate_editorial,
+    verify_quote,
 )
 from course_server.newsletter.cli import main as newsletter_main
 from course_server.newsletter.compose import EDITORIAL_MARKER, HIGHLIGHTS_MARKER
@@ -306,11 +304,13 @@ def copy_json(*project_ids: str, extra: str = "") -> str:
     )
 
 
-EDITORIAL = " ".join(["Everyone looped."] * 90)
+EDITORIAL = " ".join(["Everyone looped."] * 48)
 
 
-def editorial_json(headline: str = "Loop, There It Is", editorial: str = EDITORIAL) -> str:
-    return json.dumps({"headline": headline, "editorial": editorial})
+def editorial_json(
+    headline: str = "Loop, There It Is", editorial: str = EDITORIAL, quote_choice: int = 0
+) -> str:
+    return json.dumps({"headline": headline, "editorial": editorial, "quote_choice": quote_choice})
 
 
 def score_json(goal_fit: int, interest: int, execution: int, rationale: str = "ok") -> str:
@@ -323,6 +323,7 @@ def score_json(goal_fit: int, interest: int, execution: int, rationale: str = "o
             "built": "A tidy agent loop.",
             "went_well": "Clear loop.",
             "struggled": "Thin docs.",
+            "quote": "",
         }
     )
 
@@ -348,7 +349,7 @@ class ScriptedWriter:
             return self.scores.get(project_id, score_json(6, 6, 6))
         if system_prompt.startswith(EDITORIAL_MARKER):
             self.editorial_prompts.append(user_prompt)
-            return self.editorials.pop(0)
+            return self.editorials.pop(0) if len(self.editorials) > 1 else self.editorials[0]
         assert system_prompt.startswith(HIGHLIGHTS_MARKER)
         self.prompts.append(user_prompt)
         # The last scripted response is repeated so rule-breaking scripts exhaust every retry.
@@ -440,7 +441,7 @@ def test_compose_writes_only_the_selected_projects_in_order_and_reprompts_once()
     )
 
 
-def test_compose_editorial_uses_every_students_notes_and_enforces_length() -> None:
+def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() -> None:
     week = weeks()[0]
     digest = digest_for(week)
     branding = NewsletterBranding()
@@ -454,185 +455,116 @@ def test_compose_editorial_uses_every_students_notes_and_enforces_length() -> No
             built="Ada built a loop.",
             went_well="Clean loop.",
             struggled="Sparse tests.",
+            quote="Agents learn best when reality gets a vote.",
         ),
         ProjectScore(project_id="agents2026-grace", interest=5, execution=5, goal_fit=6, total=5.4),
     )
-    writer = ScriptedWriter([], editorials=[editorial_json("Loop, There It Is")])
 
-    headline, editorial = compose_editorial(digest, scores, writer, branding=branding)
+    def link_checker(url: str) -> bool:
+        return url.startswith("https://good.example/")
 
-    assert headline == "Loop, There It Is" and editorial == EDITORIAL
-    prompt = writer.editorial_prompts[0]
-    assert (
-        "4 students; 3 posted work this week; 1 have nothing beyond the starter template" in prompt
+    writer = ScriptedWriter([], editorials=[editorial_json("Loop, There It Is", quote_choice=1)])
+
+    draft = compose_editorial(digest, scores, writer, branding=branding, link_checker=link_checker)
+
+    assert (draft.headline, draft.editorial, draft.quote_choice) == (
+        "Loop, There It Is",
+        EDITORIAL,
+        1,
     )
-    assert "- Ada (assessment 8.2/10): built: Ada built a loop. / went well: Clean loop." in prompt
-    assert "- Hal: submission could not be assessed." in prompt
-    assert "Nothing posted yet: Idle" in prompt
+    prompt = writer.editorial_prompts[0]
+    assert "Submission 1: built: Ada built a loop. / went well: Clean loop." in prompt
+    assert "students;" not in prompt and "Nothing posted" not in prompt
+    assert '1. "Agents learn best when reality gets a vote." \u2014 Ada' in prompt
     assert prompt == build_editorial_user_prompt(digest, scores)
+
+    # Names, participation counts, long copy, and dead links are all rejected with feedback.
+    names = ["Ada", "Grace", "Hal", "Idle"]
+    assert validate_editorial("Fine", EDITORIAL, names=names) == ()
+    assert any(
+        'name students (found "Grace")' in item
+        for item in validate_editorial("Fine", EDITORIAL + " Grace shone.", names=names)
+    )
+    assert any(
+        "count participation" in item
+        for item in validate_editorial("Fine", "Twenty-seven of you posted. " + EDITORIAL)
+    )
+    assert any(
+        "count participation" in item
+        for item in validate_editorial("Fine", EDITORIAL + " 12 students struggled.")
+    )
+    assert any(
+        "write between 80 and 125" in item
+        for item in validate_editorial("Fine", " ".join(["word"] * 200))
+    )
+    linked = EDITORIAL + " See [the ReAct paper](https://good.example/react) for more."
+    assert validate_editorial("Fine", linked, link_checker=link_checker) == ()
+    dead = EDITORIAL + " See [notes](https://bad.example/gone)."
+    assert any(
+        "does not resolve" in item
+        for item in validate_editorial("Fine", dead, link_checker=link_checker)
+    )
+    many = EDITORIAL + (
+        " [a](https://good.example/1) [b](https://good.example/2) [c](https://good.example/3)"
+    )
+    assert any(
+        "3 links" in item for item in validate_editorial("Fine", many, link_checker=link_checker)
+    )
+    assert any(
+        "must not contain links" in item
+        for item in validate_editorial("Fine", EDITORIAL + " See https://bare.example/")
+    )
 
     short = ScriptedWriter(
         [], editorials=[editorial_json(editorial="Too short."), editorial_json()]
     )
-    assert compose_editorial(digest, scores, short, branding=branding)[1] == EDITORIAL
-    assert "editorial has 2 words; write between 160 and 230" in short.editorial_prompts[1]
+    retried = compose_editorial(digest, scores, short, branding=branding, link_checker=None)
+    assert retried.editorial == EDITORIAL
+    assert "editorial has 2 words; write between 80 and 125" in short.editorial_prompts[1]
     with pytest.raises(NewsletterCompositionError, match="editorial broke platform rules"):
         compose_editorial(
             digest,
             scores,
-            ScriptedWriter(
-                [],
-                editorials=[
-                    editorial_json(headline=" ".join(["pun"] * 13)),
-                    editorial_json(editorial=EDITORIAL + " Great rubric."),
-                ],
-            ),
+            ScriptedWriter([], editorials=[editorial_json(quote_choice=5)]),
             branding=branding,
+            link_checker=None,
         )
 
-    full = compose_newsletter(
+    copy, chosen = compose_newsletter(
         digest,
         scores,
-        ScriptedWriter([copy_json("agents2026-ada")]),
+        ScriptedWriter([copy_json("agents2026-ada")], editorials=[editorial_json(quote_choice=1)]),
         selected=("agents2026-ada",),
         branding=branding,
+        link_checker=None,
     )
-    assert full.headline == "Loop, There It Is" and len(full.highlights) == 1
+    assert copy.headline == "Loop, There It Is" and len(copy.highlights) == 1
+    assert chosen == ("agents2026-ada", "Ada", "Agents learn best when reality gets a vote.")
 
 
-def test_scoring_ranks_by_weighted_total_with_goal_gate_and_cooldown() -> None:
-    week = weeks()[0]
-    digest = digest_for(week, cooldown=frozenset({"agents2026-hal"}))
-    writer = ScriptedWriter(
-        [],
-        scores={
-            "agents2026-ada": score_json(goal_fit=6, interest=9, execution=7, rationale="Bold."),
-            "agents2026-grace": score_json(goal_fit=9, interest=5, execution=8),
-            "agents2026-hal": score_json(goal_fit=10, interest=10, execution=10),
-        },
+def test_verify_quote_accepts_only_verbatim_student_prose() -> None:
+    project = ProjectEvidence(
+        project_id="agents2026-ada",
+        label="Ada",
+        week_file_count=1,
+        site_file_count=1,
+        commit_count=1,
+        documents=(
+            ProjectDocument(
+                path="weekly_builds/week01/README.md",
+                text="# Loop\n\nI learned that agents   learn best when\nreality gets a vote.",
+            ),
+        ),
+        site_text="Welcome to my site, where \u201cthe loop is the lesson\u201d every week.",
     )
-
-    scores = score_projects(digest, writer, branding=NewsletterBranding(), workers=1)
-
-    assert [score.project_id for score in scores] == [
-        "agents2026-hal",
-        "agents2026-ada",
-        "agents2026-grace",
-    ]
-    assert scores[1].total == pytest.approx(0.4 * 6 + 0.4 * 9 + 0.2 * 7)
-    assert scores[1].rationale == "Bold." and scores[0].eligible is False
-    assert len(writer.score_prompts) == 3
-    assert "Project id: agents2026-ada" in "".join(writer.score_prompts)
-    assert "agents2026-idle" not in "".join(writer.score_prompts)
-    assert select_highlights(scores, count=2) == ("agents2026-ada", "agents2026-grace")
-    assert select_highlights(scores, count=1) == ("agents2026-ada",)
-
-    # A project that misses the assignment ranks behind every project that met it.
-    gated = ProjectScore(
-        project_id="agents2026-zed", interest=10, execution=10, goal_fit=2, total=6.8
+    assert (
+        verify_quote("Agents learn best when reality gets a vote.", project)
+        == "Agents learn best when reality gets a vote."
     )
-    modest = ProjectScore(
-        project_id="agents2026-yui", interest=4, execution=4, goal_fit=6, total=4.8
-    )
-    assert select_highlights((gated, modest), count=2) == ("agents2026-yui", "agents2026-zed")
-
-    # Broken model output for one project drops only that project.
-    broken = ScriptedWriter([], scores={"agents2026-ada": "not json"})
-    remaining = score_projects(digest, broken, branding=NewsletterBranding(), workers=1)
-    assert [score.project_id for score in remaining] == ["agents2026-grace", "agents2026-hal"]
-
-
-def test_image_discovery_and_candidate_filtering_are_deterministic() -> None:
-    week = weeks()[0]
-    site = "https://mitmedialab.github.io/agents2026-ada/"
-    anchors = [
-        {"href": site, "text": "Home"},
-        {"href": "https://github.com/mitmedialab/agents2026-ada/tree/main/week01", "text": "w1"},
-        {"href": f"{site}#builds", "text": "Builds"},
-        {"href": f"{site}week01.html", "text": "W01 Build an Agent"},
-        {"href": f"{site}weeks/week-01.html#top", "text": "Week 1 RollWorld"},
-        {"href": f"{site}week01.html", "text": "duplicate"},
-        {"href": f"{site}week10.html", "text": "Week 10"},
-        {"href": f"{site}final.html", "text": "Final project"},
-    ]
-    assert discover_week_pages(anchors, site_url=site, week=week) == [
-        f"{site}week01.html",
-        f"{site}weeks/week-01.html",
-    ]
-    assert discover_week_pages(anchors, site_url=site, week=weeks()[1]) == []
-    single_page = [
-        {"href": f"{site}#home", "text": "Journal"},
-        {"href": f"{site}#week-01", "text": "Explore the first week"},
-        {"href": f"{site}#final-project", "text": "Final project"},
-    ]
-    assert discover_week_pages(single_page, site_url=site, week=week) == []
-    assert discover_week_anchor(single_page, site_url=site, week=week) == f"{site}#week-01"
-    assert discover_week_anchor(anchors, site_url=site, week=week) is None
-
-    raw = [
-        {
-            "index": 0,
-            "tag": "img",
-            "src": f"{site}a/hero.webp",
-            "alt": "Agent",
-            "width": 998,
-            "height": 507,
-        },
-        {"index": 1, "tag": "svg", "src": "", "alt": "", "width": 640, "height": 400},
-        {
-            "index": 2,
-            "tag": "img",
-            "src": f"{site}a/icon.png",
-            "alt": "",
-            "width": 64,
-            "height": 64,
-        },
-        {
-            "index": 3,
-            "tag": "img",
-            "src": f"{site}a/strip.png",
-            "alt": "",
-            "width": 1200,
-            "height": 120,
-        },
-        {
-            "index": 4,
-            "tag": "img",
-            "src": f"{site}a/hero.webp",
-            "alt": "dup",
-            "width": 998,
-            "height": 507,
-        },
-        {"index": 5, "tag": "canvas", "src": "", "alt": "", "width": 800, "height": 600},
-        {
-            "index": 6,
-            "tag": "img",
-            "src": f"{site}a/hidden.png",
-            "alt": "",
-            "width": 800,
-            "height": 600,
-            "visible": False,
-        },
-        {"index": 7, "tag": "div", "src": "", "alt": "", "width": 800, "height": 600},
-        {
-            "index": 8,
-            "tag": "img",
-            "src": "data:image/png;base64,AAAA",
-            "alt": "",
-            "width": 500,
-            "height": 300,
-        },
-    ]
-    candidates = filter_candidates(raw, page_url=f"{site}week01.html")
-    assert [(c.index, c.tag) for c in candidates] == [
-        (0, "img"),
-        (5, "canvas"),
-        (1, "svg"),
-        (8, "img"),
-    ]
-    prompt = build_judge_prompt(context="Ada: bold loop", week=week, candidates=candidates)
-    assert '1. img 998x507 alt="Agent"' in prompt and "2. canvas 800x600" in prompt
-    assert "Build a minimal agent loop." in prompt
+    assert verify_quote("\u201cthe loop is the lesson\u201d every week.", project) != ""
+    assert verify_quote("Agents learn best when reality votes.", project) == ""
+    assert verify_quote("Short quote here.", project) == ""
+    assert verify_quote(" ".join(["word"] * 31), project) == ""
 
 
 def sample_issue(*, status: str = "draft") -> NewsletterIssue:
@@ -644,7 +576,10 @@ def sample_issue(*, status: str = "draft") -> NewsletterIssue:
         subject="The Class Runtime from MAS.S60",
         body=NewsletterCopy(
             headline="Week one is in the loop.",
-            editorial="Everyone looped.\n\nSome looped twice.",
+            editorial=(
+                "Everyone looped.\n\nSome looped twice; see "
+                "[the ReAct paper](https://arxiv.org/abs/2210.03629?x=1&y=2) for why."
+            ),
             highlights=(
                 Highlight(
                     project_id="agents2026-ada",
@@ -663,7 +598,13 @@ def sample_issue(*, status: str = "draft") -> NewsletterIssue:
             ProjectLink(project_id="agents2026-hal", label="Hal", site_url=None, posted=False),
             ProjectLink(project_id="agents2026-ivy", label="Ivy", site_url=None),
         ),
-        quote=PIONEER_QUOTES[0],
+        quote=PioneerQuote(
+            text="Agents learn best when reality gets a vote.",
+            author="Ada",
+            source="from their week 1 post",
+            url="https://a.example/",
+            kind="student",
+        ),
         images=(
             HighlightImage(
                 project_id="agents2026-ada",
@@ -716,8 +657,9 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     ) in text
     assert "Hal" not in text
     assert "Ada — https://a.example/" not in text.split("ALL THE OTHER BUILDS")[1]
-    assert '"We can only see a short distance ahead' in text
-    assert "— Alan Turing, Computing Machinery and Intelligence, 1950" in text
+    assert '"Agents learn best when reality gets a vote."' in text
+    assert "— Ada, from their week 1 post (https://a.example/)" in text
+    assert "the ReAct paper (https://arxiv.org/abs/2210.03629?x=1&y=2)" in text
     assert "Class website: https://cognitive-agents.media.mit.edu" in text
 
     html = render_html(issue)
@@ -725,7 +667,11 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "Ada &lt;script&gt;alert(1)&lt;/script&gt; loops" in html
     assert "<h1" in html and "Week one is in the loop." in html
     assert "How the week went</p>" in html
-    assert html.count("Everyone looped.</p>") == 1 and "Some looped twice.</p>" in html
+    assert html.count("Everyone looped.</p>") == 1
+    assert (
+        '<a href="https://arxiv.org/abs/2210.03629?x=1&amp;y=2"' in html
+        and ">the ReAct paper</a> for why.</p>" in html
+    )
     assert "Grace built a tiny tool-calling loop." in html
     assert "Nothing posted for this week yet." in html
     assert "The assignment</p>" in html and ">Build a minimal agent loop.</p>" in html
@@ -738,7 +684,9 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert 'href="https://g.example/?x=1&amp;y=2"' in html
     assert ">Ivy</span>" in html and "Hal" not in html
     assert 'href="https://cognitive-agents.media.mit.edu"' in html
-    assert "Alan Turing" in html and "<title>The Class Runtime from MAS.S60</title>" in html
+    assert "Alan Turing" not in html and "<title>The Class Runtime from MAS.S60</title>" in html
+    assert "&ldquo;Agents learn best when reality gets a vote.&rdquo;" in html
+    assert '<a href="https://a.example/"' in html and "Ada, from their week 1 post</a>" in html
     assert "background:#000000" in html and "#f5f5f2" in html
     assert "\u2019" not in html and "\u201c" not in html
 
@@ -787,7 +735,10 @@ def test_store_round_trips_issues_and_derives_cooldown_and_used_quotes(tmp_path:
     }
     assert store.recently_highlighted(before_week=2, cooldown=2) == {"agents2026-ada"}
     assert store.recently_highlighted(before_week=5, cooldown=0) == frozenset()
-    assert store.used_quote_texts() == {PIONEER_QUOTES[0].text, PIONEER_QUOTES[1].text}
+    assert store.used_quote_texts() == {
+        "Agents learn best when reality gets a vote.",
+        PIONEER_QUOTES[1].text,
+    }
     assert store.load("2026-week09") is None
     with pytest.raises(NewsletterStoreError):
         store.load("../etc/passwd")
@@ -901,6 +852,7 @@ def make_service(
         ),
         writer=writer,
         image_finder=FakeImageFinder(),
+        link_checker=None,
         model_id="test-model",
         clock=lambda: datetime(2026, 9, 22, 15, 0, tzinfo=UTC),
     )
@@ -932,7 +884,8 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         "Hal 9000": True,
         "Zed": False,
     }
-    assert issue.model_id == "test-model" and issue.quote == PIONEER_QUOTES[0]
+    assert issue.model_id == "test-model"
+    assert issue.quote == PIONEER_QUOTES[0] and issue.quote.kind == "pioneer"
     assert [(image.project_id, image.filename, image.kind) for image in issue.images] == [
         ("agents2026-ada", "agents2026-ada.jpg", "post_image")
     ]
@@ -946,7 +899,8 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
     assert issue.body.headline == "Loop, There It Is"
     assert issue.built_for("agents2026-ada") == "A tidy agent loop."
     assert issue.built_for("agents2026-grace") is None
-    assert "4 students; 2 posted work this week" in writer.editorial_prompts[0]
+    assert "No candidate quotes were found this week" in writer.editorial_prompts[0]
+    assert "students;" not in writer.editorial_prompts[0]
     assert (tmp_path / "newsletter/issues/2026-week01.html").exists()
 
     async def scenario() -> None:
@@ -1001,7 +955,15 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         service.draft(week_number=1)
 
     # The next issue must not feature the students highlighted last week.
-    week2_writer = ScriptedWriter([copy_json("agents2026-grace")])
+    week2_writer = ScriptedWriter(
+        [copy_json("agents2026-grace")],
+        scores={
+            "agents2026-grace": score_json(9, 8, 8).replace(
+                '"quote": ""', '"quote": "Tools! Tools are how an agent touches the world."'
+            )
+        },
+        editorials=[editorial_json(quote_choice=1)],
+    )
     service2 = NewsletterService(
         settings=NewsletterSettings(highlight_count=2, highlight_cooldown_issues=2),
         weeks=weeks(),
@@ -1017,7 +979,7 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
     week2_catalog = fake_catalog()
     week2_catalog.repositories["agents2026-grace"].tree.append("weekly_builds/week02/README.md")
     week2_catalog.repositories["agents2026-grace"].files["weekly_builds/week02/README.md"] = (
-        "Tools!"
+        "Tools! Tools are how an agent touches the world."
     )
     week2_catalog.repositories["agents2026-ada"].commits.insert(
         0, ("2026-09-25T12:00:00Z", "week 2")
@@ -1031,6 +993,7 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         ),
         writer=week2_writer,
         image_finder=FakeImageFinder(fail_for={"https://mitmedialab.github.io/agents2026-grace/"}),
+        link_checker=None,
         clock=lambda: datetime(2026, 9, 29, 15, 0, tzinfo=UTC),
     )
     week2 = service2.draft()
@@ -1041,7 +1004,9 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         "agents2026-ada": False,
         "agents2026-grace": True,
     }
-    assert week2.quote == PIONEER_QUOTES[1]
+    assert week2.quote.kind == "student" and week2.quote.author == "Grace"
+    assert week2.quote.text == "Tools! Tools are how an agent touches the world."
+    assert week2.quote.url == "https://mitmedialab.github.io/agents2026-grace/"
 
     forced = ScriptedWriter(
         [copy_json("agents2026-hal-9000", "agents2026-ada")],

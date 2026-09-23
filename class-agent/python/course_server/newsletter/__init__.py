@@ -6,6 +6,8 @@ from .compose import (
     EDITORIAL_SCHEMA,
     HIGHLIGHTS_MARKER,
     HIGHLIGHTS_SCHEMA,
+    EditorialDraft,
+    LinkChecker,
     NewsletterCompositionError,
     NewsletterWriter,
     OpenAINewsletterWriter,
@@ -17,6 +19,8 @@ from .compose import (
     compose_highlights,
     compose_newsletter,
     describe_project,
+    link_resolves,
+    quote_candidates,
     validate_editorial,
     validate_highlights,
 )
@@ -61,6 +65,7 @@ from .score import (
     parse_score,
     score_projects,
     select_highlights,
+    verify_quote,
 )
 from .screenshots import ScreenshotError, SiteScreenshot, encode_jpeg
 from .service import NewsletterService, NewsletterStateError, normalize_recipients
@@ -79,6 +84,7 @@ __all__ = [
     "CommitSummary",
     "CourseWeek",
     "Delivery",
+    "EditorialDraft",
     "EvidenceLimits",
     "FileNewsletterStore",
     "FoundImage",
@@ -87,6 +93,7 @@ __all__ = [
     "HighlightImageFinder",
     "ImageCandidate",
     "ImageJudge",
+    "LinkChecker",
     "NewsletterBranding",
     "NewsletterCompositionError",
     "NewsletterCopy",
@@ -125,11 +132,13 @@ __all__ = [
     "encode_jpeg",
     "filter_candidates",
     "issue_id_for",
+    "link_resolves",
     "load_schedule",
     "normalize_recipients",
     "parse_schedule",
     "parse_score",
     "project_label",
+    "quote_candidates",
     "relative_image_source",
     "render_html",
     "render_text",
@@ -138,4 +147,5 @@ __all__ = [
     "select_week",
     "validate_editorial",
     "validate_highlights",
+    "verify_quote",
 ]

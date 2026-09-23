@@ -188,13 +188,19 @@ class ProjectScore(NewsletterModel):
     built: Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)] = ""
     went_well: Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)] = ""
     struggled: Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)] = ""
+    # A verbatim, platform-verified sentence from the student's own writing, or empty.
+    quote: Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)] = ""
     eligible: bool = True
 
 
 class PioneerQuote(NewsletterModel):
+    """The closing quote: a verified line from a student's post, or a curated pioneer quote."""
+
     text: ShortText
     author: ShortText
     source: ShortText
+    url: str | None = None
+    kind: Literal["pioneer", "student"] = "pioneer"
 
 
 class ProjectLink(NewsletterModel):

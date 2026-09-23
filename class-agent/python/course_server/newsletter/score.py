@@ -52,6 +52,14 @@ SCORE_SCHEMA: dict[str, object] = {
             "type": "string",
             "description": "At most 25 words: what the student struggled with or left missing.",
         },
+        "quote": {
+            "type": "string",
+            "description": (
+                "One sentence copied exactly, character for character, from the student's own "
+                "prose (not code, headings, or assignment text) that is insightful or inspiring "
+                "about building agents; at most 30 words; empty string if nothing qualifies."
+            ),
+        },
     },
     "required": [
         "interest",
@@ -61,6 +69,7 @@ SCORE_SCHEMA: dict[str, object] = {
         "built",
         "went_well",
         "struggled",
+        "quote",
     ],
     "additionalProperties": False,
 }
@@ -93,7 +102,10 @@ def build_score_system_prompt(branding: NewsletterBranding) -> str:
         "saying what the student built, naming the project if it has a name; `went_well` and "
         "`struggled`, each at most 25 words, describing what worked and where the student had "
         "difficulty or left gaps, so an editor can summarize the week. Refer to the student by "
-        "the label. Respond with JSON matching the schema and nothing else."
+        "the label. Finally, `quote`: if the student's own prose contains a sentence that is "
+        "genuinely insightful or inspiring about building agents, copy it exactly as written "
+        "(it will be checked verbatim against the source); otherwise return an empty string. "
+        "Respond with JSON matching the schema and nothing else."
     )
 
 
@@ -108,6 +120,27 @@ def build_score_user_prompt(week: CourseWeek, project: ProjectEvidence) -> str:
             describe_project(project, status="candidate"),
         ]
     )
+
+
+_QUOTE_MAX_WORDS = 30
+_QUOTE_MIN_CHARS = 25
+_NORMALIZE = str.maketrans({"\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"'})
+
+
+def _normalize(value: str) -> str:
+    return " ".join(value.translate(_NORMALIZE).split()).casefold()
+
+
+def verify_quote(quote: str, project: ProjectEvidence) -> str:
+    """Return the quote only if it appears verbatim in the student's collected prose."""
+
+    candidate = " ".join(quote.split()).strip().strip('"\u201c\u201d')
+    if len(candidate) < _QUOTE_MIN_CHARS or len(candidate.split()) > _QUOTE_MAX_WORDS:
+        return ""
+    corpus = _normalize(
+        "\n".join([*(document.text for document in project.documents), project.site_text or ""])
+    )
+    return candidate if _normalize(candidate) in corpus else ""
 
 
 def parse_score(raw: str, *, project_id: str, eligible: bool) -> ProjectScore:
@@ -137,6 +170,7 @@ def parse_score(raw: str, *, project_id: str, eligible: bool) -> ProjectScore:
             built=str(payload.get("built", ""))[:300],
             went_well=str(payload.get("went_well", ""))[:400],
             struggled=str(payload.get("struggled", ""))[:400],
+            quote=str(payload.get("quote", ""))[:400],
             eligible=eligible,
         )
     except (TypeError, ValueError, ValidationError) as error:
@@ -170,6 +204,9 @@ def score_projects(
             score = parse_score(
                 raw, project_id=project.project_id, eligible=project.project_id in eligible
             )
+            if score.quote and not verify_quote(score.quote, project):
+                say(f"  {project.project_id}: quote was not verbatim; dropped")
+                score = score.model_copy(update={"quote": ""})
         except NewsletterScoringError as error:
             say(f"  {project.project_id}: not scored ({error})")
             return None

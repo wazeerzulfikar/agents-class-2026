@@ -9,15 +9,22 @@ week, shows the draft to the instructor, and sends email only after an explicit 
 Every issue follows the same skimmable shape:
 
 1. A punny headline about the week's assignment, the week's dates, the assignment itself, and a
-   roughly 200-word editorial on how the class did: what generally went well, what people
-   struggled with, and patterns worth noticing, synthesized from the staff notes on every
-   submission.
+   roughly 100-word editorial on how the class did, synthesized from the staff notes on every
+   submission: what generally went well, then the common blockers framed constructively against
+   the week's learning goals. The editorial never names a student, never counts who submitted,
+   and never mentions the featured projects; the model sees the notes anonymized and uncounted,
+   and code rejects names, participation tallies, and overlong copy. It may add up to two
+   reference links in Markdown form; each URL is checked to resolve before it is accepted.
 2. Four highlights (configurable). Each one shows an image from the student's own post, names
    the student, and gives a headline plus two sentences: what the build is and what makes it
    interesting, then specifically how it does what the assignment asked. A link opens the site.
 3. Every other student who posted work that week, with one sentence on what they built and a
    link to their site. Students with nothing beyond the starter template are left off the list.
-4. A closing quote from an AI or computing pioneer.
+4. A closing quote. Preferably a line from a student's own post that week: the scoring pass asks
+   each project for one inspiring sentence, code verifies it appears verbatim in that student's
+   collected prose, and the editorial call picks the best candidate, attributed and linked to the
+   student's site. When no verified candidate exists, a curated quote from an AI or computing
+   pioneer is used instead, rotated across issues.
 5. The course line (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`) and a link
    to the class website, `https://cognitive-agents.media.mit.edu`.
 

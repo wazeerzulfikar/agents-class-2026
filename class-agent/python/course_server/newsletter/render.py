@@ -15,6 +15,8 @@ from html import escape
 
 from .models import HighlightImage, NewsletterIssue, ProjectLink
 
+_MARKDOWN_LINK = re.compile(r"\[([^\]\n]{1,120})\]\((https://[^\s)]+)\)")
+
 _RULE = "-" * 60
 
 # Mirrors packages/ui/src/styles.css tokens; email clients need literal values.
@@ -73,7 +75,7 @@ def render_text(issue: NewsletterIssue) -> str:
         _window_label(issue),
         f"THE ASSIGNMENT: {issue.week.tutorial}",
         "",
-        issue.body.editorial,
+        _MARKDOWN_LINK.sub(r"\1 (\2)", issue.body.editorial),
         "",
         _RULE,
         "",
@@ -99,7 +101,8 @@ def render_text(issue: NewsletterIssue) -> str:
             "",
             _RULE,
             f'"{issue.quote.text}"',
-            f"— {issue.quote.author}, {issue.quote.source}",
+            f"— {issue.quote.author}, {issue.quote.source}"
+            + (f" ({issue.quote.url})" if issue.quote.url else ""),
             "",
             _course_line(issue),
             f"Class website: {branding.course_site_url}",
@@ -123,6 +126,19 @@ def cid_image_source(image: HighlightImage) -> str:
 
 def _anchor(url: str, inner: str, *, style: str) -> str:
     return f'<a href="{escape(url, quote=True)}" style="{style}">{inner}</a>'
+
+
+def _prose_html(text: str) -> str:
+    """Escape prose, turning only validated Markdown links into anchors."""
+
+    parts: list[str] = []
+    position = 0
+    for match in _MARKDOWN_LINK.finditer(text):
+        parts.append(escape(text[position : match.start()]))
+        parts.append(_anchor(match.group(2), escape(match.group(1)), style=_UNDERLINED))
+        position = match.end()
+    parts.append(escape(text[position:]))
+    return "".join(parts)
 
 
 def _highlight_html(issue: NewsletterIssue, index: int, *, image_src: ImageSource) -> str:
@@ -187,10 +203,13 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
     )
     editorial = "".join(
         f'<p style="margin:0 0 16px 0;font-family:{_SANS};font-size:16px;line-height:1.55;'
-        f'color:{_INK_SOFT};">{escape(paragraph.strip())}</p>'
+        f'color:{_INK_SOFT};">{_prose_html(paragraph.strip())}</p>'
         for paragraph in re.split(r"\n\s*\n|\n", issue.body.editorial)
         if paragraph.strip()
     )
+    attribution = f"&mdash; {escape(issue.quote.author)}, {escape(issue.quote.source)}"
+    if issue.quote.url:
+        attribution = _anchor(issue.quote.url, attribution, style=f"{_LABEL}text-decoration:none;")
     rule = f'<hr style="border:0;border-top:1px solid {_BORDER};margin:36px 0;">'
     return (
         "<!DOCTYPE html>\n"
@@ -223,8 +242,7 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
         f"{rule}"
         f'<p style="margin:0 0 12px 0;font-family:{_SANS};font-size:21px;line-height:1.4;'
         f'font-weight:300;color:{_INK};">&ldquo;{escape(issue.quote.text)}&rdquo;</p>'
-        f'<p style="margin:0;{_LABEL}">&mdash; {escape(issue.quote.author)}, '
-        f"{escape(issue.quote.source)}</p>"
+        f'<p style="margin:0;{_LABEL}">{attribution}</p>'
         f"{rule}"
         f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(_course_line(issue))}</p>'
         '<p style="margin:0 0 10px 0;">'
