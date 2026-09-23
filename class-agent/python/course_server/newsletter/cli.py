@@ -1,0 +1,294 @@
+"""Instructor command line for drafting, reviewing, and sending the weekly newsletter."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+from collections.abc import Mapping, Sequence
+from datetime import date
+from typing import TextIO
+
+from dotenv import load_dotenv
+
+from course_server.config import AgentSettings, ConfigurationError, MailSettings
+from course_server.mail.adapters import create_mail_adapter
+from course_server.postgres.auth_store import PostgresAuthStore, create_auth_pool
+from course_server.student_projects import GitHubStudentProjectCatalog
+from course_server.web_search import fetch_public_webpage
+
+from .collect import WeeklyEvidenceCollector
+from .compose import NewsletterCompositionError, OpenAINewsletterWriter
+from .models import NewsletterIssue, NewsletterSettings
+from .render import render_html, render_text
+from .schedule import NewsletterScheduleError, load_schedule
+from .service import NewsletterService, NewsletterStateError
+from .store import FileNewsletterStore, NewsletterStoreError
+
+MODULE = "course_server.newsletter"
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=f"python -m {MODULE}",
+        description="Draft the weekly class newsletter from student repositories, then send it.",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    draft = commands.add_parser("draft", help="collect last week's builds and write a draft")
+    draft.add_argument("--week", type=int, help="schedule week number (default: last finished)")
+    draft.add_argument(
+        "--as-of",
+        type=date.fromisoformat,
+        help="pretend today is this date (YYYY-MM-DD) when choosing the week",
+    )
+    draft.add_argument("--force", action="store_true", help="redraft a week already sent")
+    draft.add_argument("--quiet", action="store_true", help="do not print the draft body")
+
+    show = commands.add_parser("show", help="print a stored issue")
+    show.add_argument("issue_id")
+    show.add_argument("--html", action="store_true", help="print the HTML rendering")
+
+    commands.add_parser("list", help="list stored issues and their status")
+
+    send = commands.add_parser("send", help="email an approved draft")
+    send.add_argument("issue_id")
+    send.add_argument("--to", help="comma-separated recipients (adds to NEWSLETTER_RECIPIENTS)")
+    send.add_argument(
+        "--to-active-students",
+        action="store_true",
+        help="also send to every active student account in the database",
+    )
+    send.add_argument(
+        "--test-to",
+        help="comma-separated addresses for a test copy; the issue stays a draft",
+    )
+    send.add_argument("--yes", action="store_true", help="skip the interactive confirmation")
+    return parser
+
+
+def _split(value: str | None) -> tuple[str, ...]:
+    return tuple(item.strip() for item in (value or "").split(",") if item.strip())
+
+
+def _store(values: Mapping[str, str]) -> tuple[NewsletterSettings, FileNewsletterStore]:
+    settings = NewsletterSettings.from_environment(values)
+    return settings, FileNewsletterStore(settings.data_path)
+
+
+def _drafting_service(values: Mapping[str, str], *, log: TextIO) -> NewsletterService:
+    settings, store = _store(values)
+    agent_settings = AgentSettings.from_environment(values)
+    if not agent_settings.github_student_projects_enabled or agent_settings.github_token is None:
+        raise ConfigurationError(
+            "GITHUB_STUDENT_PROJECTS_ENABLED=true and a read-only GITHUB_TOKEN are required"
+        )
+    catalog = GitHubStudentProjectCatalog(
+        agent_settings.github_token.get_secret_value(),
+        organization=agent_settings.github_organization,
+        repository_prefix=agent_settings.github_repository_prefix,
+        excluded_repositories=agent_settings.github_excluded_repositories,
+        roster_cache_ttl_seconds=agent_settings.github_roster_cache_ttl_seconds,
+    )
+    collector = WeeklyEvidenceCollector(
+        catalog,
+        repository_prefix=agent_settings.github_repository_prefix,
+        read_site=fetch_public_webpage,
+        log=lambda message: print(message, file=log),
+    )
+    writer = OpenAINewsletterWriter(
+        model_id=agent_settings.model_id,
+        api_key=agent_settings.model_api_key,
+    )
+    return NewsletterService(
+        settings=settings,
+        weeks=load_schedule(settings.schedule_path, timezone=settings.timezone),
+        collector=collector,
+        writer=writer,
+        store=store,
+        model_id=agent_settings.model_id,
+        log=lambda message: print(message, file=log),
+    )
+
+
+def _sending_service(values: Mapping[str, str], *, log: TextIO) -> NewsletterService:
+    settings, store = _store(values)
+    return NewsletterService(
+        settings=settings,
+        weeks=load_schedule(settings.schedule_path, timezone=settings.timezone),
+        store=store,
+        log=lambda message: print(message, file=log),
+    )
+
+
+async def _active_student_addresses(database_url: str) -> tuple[str, ...]:
+    pool = create_auth_pool(database_url)
+    await pool.open()
+    try:
+        users = await PostgresAuthStore(pool).list_users()
+    finally:
+        await pool.close()
+    return tuple(str(user.email) for user in users if user.active and user.role == "student")
+
+
+def _print_issue(issue: NewsletterIssue, store: FileNewsletterStore, *, out: TextIO) -> None:
+    json_path, text_path, html_path = store.paths_for(issue.issue_id)
+    print(f"Issue: {issue.issue_id} ({issue.status})", file=out)
+    print(f"Subject: {issue.subject}", file=out)
+    print(f"Files: {json_path}\n       {text_path}\n       {html_path}", file=out)
+    print("", file=out)
+
+
+def _confirm(prompt: str, *, stdin: TextIO) -> bool:
+    if not stdin.isatty():
+        return False
+    print(prompt, end="", flush=True)
+    return stdin.readline().strip() == "SEND"
+
+
+async def _send(
+    arguments: argparse.Namespace,
+    values: Mapping[str, str],
+    *,
+    out: TextIO,
+    err: TextIO,
+    stdin: TextIO,
+) -> int:
+    service = _sending_service(values, log=err)
+    settings, store = _store(values)
+    issue = service.load(arguments.issue_id)
+    test_only = bool(arguments.test_to)
+    if test_only:
+        recipients: list[str] = list(_split(arguments.test_to))
+    else:
+        recipients = [*settings.recipients, *_split(arguments.to)]
+        if arguments.to_active_students:
+            database_url = values.get("DATABASE_URL", "").strip()
+            if not database_url:
+                raise ConfigurationError("DATABASE_URL is required for --to-active-students")
+            recipients.extend(await _active_student_addresses(database_url))
+    if not recipients:
+        print(
+            "No recipients. Use --to, --to-active-students, --test-to, or NEWSLETTER_RECIPIENTS.",
+            file=err,
+        )
+        return 2
+    mail_settings = MailSettings.optional_from_environment(values)
+    if mail_settings is None:
+        raise ConfigurationError("MAIL_ENABLED=true with mailbox credentials is required to send")
+
+    _print_issue(issue, store, out=out)
+    print(render_text(issue), file=out)
+    unique = sorted({address.strip().casefold() for address in recipients})
+    kind = "TEST copy" if test_only else "newsletter"
+    print(f"About to send the {kind} to {len(unique)} recipient(s):", file=out)
+    for address in unique:
+        print(f"  {address}", file=out)
+    if not arguments.yes and not _confirm(
+        'Type "SEND" to deliver, anything else to abort: ', stdin=stdin
+    ):
+        print("Aborted; nothing was sent.", file=err)
+        return 1
+
+    adapter = create_mail_adapter(mail_settings)
+    try:
+        result = await service.send(
+            issue.issue_id,
+            mail=adapter,
+            recipients=recipients,
+            test_only=test_only,
+        )
+    finally:
+        await adapter.close()
+    sent = [delivery for delivery in result.deliveries if delivery.error is None]
+    failed = [delivery for delivery in result.deliveries if delivery.error is not None]
+    print(f"Delivered {len(sent)} message(s); {len(failed)} failed.", file=out)
+    for delivery in failed:
+        print(f"  {delivery.recipient}: {delivery.error}", file=err)
+    if not test_only:
+        print(f"Issue {result.issue_id} is now marked {result.status}.", file=out)
+    return 0 if not failed else 1
+
+
+def _run(
+    arguments: argparse.Namespace,
+    values: Mapping[str, str],
+    *,
+    out: TextIO,
+    err: TextIO,
+    stdin: TextIO,
+) -> int:
+    if arguments.command == "draft":
+        service = _drafting_service(values, log=err)
+        _, store = _store(values)
+        issue = service.draft(
+            week_number=arguments.week, as_of=arguments.as_of, force=arguments.force
+        )
+        _print_issue(issue, store, out=out)
+        if not arguments.quiet:
+            print(render_text(issue), file=out)
+        print(
+            "Review the draft above (or open the .html file). To send it:\n"
+            f"  python -m {MODULE} send {issue.issue_id} --to you@example.edu\n"
+            f"  python -m {MODULE} send {issue.issue_id} --to-active-students\n"
+            f"To try a test copy first:  python -m {MODULE} send {issue.issue_id} "
+            "--test-to you@example.edu\n"
+            f"To regenerate:  python -m {MODULE} draft --week {issue.week.number}",
+            file=out,
+        )
+        return 0
+    if arguments.command == "show":
+        _, store = _store(values)
+        stored = store.load(arguments.issue_id)
+        if stored is None:
+            print(f"Issue {arguments.issue_id} does not exist.", file=err)
+            return 2
+        _print_issue(stored, store, out=out)
+        print(render_html(stored) if arguments.html else render_text(stored), file=out)
+        return 0
+    if arguments.command == "list":
+        _, store = _store(values)
+        issues = store.list_issues()
+        if not issues:
+            print("No issues yet.", file=out)
+            return 0
+        print("ISSUE\tWEEK\tSTATUS\tCREATED\tSENT\tHIGHLIGHTS", file=out)
+        for issue in issues:
+            print(
+                f"{issue.issue_id}\t{issue.week.number}\t{issue.status}\t"
+                f"{issue.created_at.date().isoformat()}\t"
+                f"{issue.sent_at.date().isoformat() if issue.sent_at else '-'}\t"
+                f"{', '.join(issue.highlighted_project_ids())}",
+                file=out,
+            )
+        return 0
+    return asyncio.run(_send(arguments, values, out=out, err=err, stdin=stdin))
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    environment: Mapping[str, str] | None = None,
+    out: TextIO | None = None,
+    err: TextIO | None = None,
+    stdin: TextIO | None = None,
+) -> int:
+    arguments = _parser().parse_args(argv)
+    if environment is None:
+        load_dotenv(override=False)
+        environment = dict(os.environ)
+    out = out or sys.stdout
+    err = err or sys.stderr
+    stdin = stdin or sys.stdin
+    try:
+        return _run(arguments, environment, out=out, err=err, stdin=stdin)
+    except (
+        ConfigurationError,
+        NewsletterCompositionError,
+        NewsletterScheduleError,
+        NewsletterStateError,
+        NewsletterStoreError,
+    ) as error:
+        print(f"Error: {error}", file=err)
+        return 2

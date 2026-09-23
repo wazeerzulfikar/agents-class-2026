@@ -160,6 +160,16 @@ development metadata tools. The credential remains server-side and the configure
 prefix, and exclusions are enforced in platform code. See
 [docs/STUDENT_PROJECTS.md](docs/STUDENT_PROJECTS.md).
 
+Instructors can produce the weekly class newsletter, *The Class Runtime*, with
+`uv run python -m course_server.newsletter draft`. The command reads every course repository
+through the same read-only GitHub integration, gathers the finished week's `weekly_builds/weekNN/`
+documents, commits, and deployed site text, asks the configured model for four highlights tied to
+that week's hands-on goal, and writes a draft under `var/newsletter/` as JSON plus `.txt` and
+`.html` renderings. Nothing is emailed until an instructor reviews the draft and runs the separate
+`send` command, which requires a typed `SEND` confirmation or `--yes`. Platform code owns the
+project links, the full project list, the closing quote, the footer, and the rule that students
+featured in recent issues are not featured again. See [docs/NEWSLETTER.md](docs/NEWSLETTER.md).
+
 Staff-published FAQ knowledge is kept separately from maintained course files in one local,
 versioned JSON file at `var/course-knowledge/published-faq.json`. The mail worker updates it
 automatically after an authorized `PUBLISH` reply, and the Course Agent reads it through
@@ -210,6 +220,7 @@ shared/registry/          public resource and trusted component registries
 data/                     untracked role-scoped student and instructor resources
 var/course-knowledge/     local generated public FAQ knowledge
 var/assignments/          local validated assignment JSON records
+var/newsletter/           local newsletter drafts, sent issues, and renderings
 docs/                    architecture and versioning decisions
 ```
 

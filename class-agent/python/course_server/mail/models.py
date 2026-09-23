@@ -143,6 +143,14 @@ class OutboundMail(MailModel):
     to: tuple[EmailStr, ...] = Field(min_length=1, max_length=20)
     subject: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=998)]
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50_000)]
+    # Optional rendered alternative; the plain text above remains the canonical body.
+    html: (
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=200_000),
+        ]
+        | None
+    ) = None
     headers: dict[str, str] = Field(default_factory=dict)
 
 

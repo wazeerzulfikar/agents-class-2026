@@ -176,6 +176,8 @@ class GoogleGmailMailAdapter:
             if name.lower().startswith("x-") and name.isascii() and value.isascii():
                 mime[name] = value
         mime.set_content(message.text)
+        if message.html is not None:
+            mime.add_alternative(message.html, subtype="html")
         return await self._send_mime(mime)
 
     async def reply_to_message(

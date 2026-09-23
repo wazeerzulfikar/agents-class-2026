@@ -12,12 +12,8 @@ from dotenv import load_dotenv
 
 from course_server.config import ConfigurationError, MailSettings
 from course_server.faq import CoordinatedFaqPublisher, LocalFaqKnowledgeStore, PostgresFaqStore
-from course_server.mail import (
-    GoogleGmailMailAdapter,
-    MailWorker,
-    MicrosoftGraphMailAdapter,
-    PostgresTAQuestionStore,
-)
+from course_server.mail import MailWorker, PostgresTAQuestionStore
+from course_server.mail.adapters import create_mail_adapter
 from course_server.mail.instructor_delivery import InstructorEmailDelivery
 from course_server.migrations import apply_migrations
 from course_server.postgres.auth_store import PostgresAuthStore, create_auth_pool
@@ -31,25 +27,7 @@ async def run_worker(*, database_url: str, settings: MailSettings, once: bool = 
     pool = create_auth_pool(database_url)
     await pool.open()
     await pool.wait()
-    adapter: MicrosoftGraphMailAdapter | GoogleGmailMailAdapter
-    if settings.provider == "microsoft_graph":
-        if settings.tenant_id is None:
-            raise ConfigurationError("MAIL_TENANT_ID is required for Microsoft Graph")
-        adapter = MicrosoftGraphMailAdapter(
-            tenant_id=settings.tenant_id,
-            client_id=settings.client_id,
-            client_secret=settings.client_secret.get_secret_value(),
-            mailbox_address=str(settings.mailbox_address),
-        )
-    else:
-        if settings.refresh_token is None:
-            raise ConfigurationError("MAIL_REFRESH_TOKEN is required for Google Gmail")
-        adapter = GoogleGmailMailAdapter(
-            client_id=settings.client_id,
-            client_secret=settings.client_secret.get_secret_value(),
-            refresh_token=settings.refresh_token.get_secret_value(),
-            mailbox_address=str(settings.mailbox_address),
-        )
+    adapter = create_mail_adapter(settings)
     worker = MailWorker(
         mail=adapter,
         questions=PostgresTAQuestionStore(pool),

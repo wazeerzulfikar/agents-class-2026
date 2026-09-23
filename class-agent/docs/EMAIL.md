@@ -25,6 +25,12 @@ safe default when no decision was requested. If the original question email was 
 mail worker replies to that staff thread with the online resolution, its decision, and its exact
 answer. A question resolved while it is still queued has no external email thread to update.
 
+`OutboundMail` carries a canonical plain-text body and an optional `html` alternative. Gmail sends
+both as `multipart/alternative`; Microsoft Graph sends the HTML body when present. Only platform
+rendering code produces HTML, and it escapes every model- or repository-derived string. The
+instructor-run weekly newsletter is currently the only sender that uses it; see
+[NEWSLETTER.md](NEWSLETTER.md).
+
 The worker has a provider-neutral boundary. Set `MAIL_PROVIDER=google_gmail` for Gmail or
 `MAIL_PROVIDER=microsoft_graph` for Microsoft 365. A cloned deployment owns its mailbox,
 provider credentials, and staff destination; neither provider is a platform-wide assumption.

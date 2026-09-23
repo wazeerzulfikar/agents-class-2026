@@ -161,7 +161,11 @@ class MicrosoftGraphMailAdapter:
             self._messages_url(),
             json={
                 "subject": message.subject,
-                "body": {"contentType": "Text", "content": message.text},
+                "body": (
+                    {"contentType": "HTML", "content": message.html}
+                    if message.html is not None
+                    else {"contentType": "Text", "content": message.text}
+                ),
                 "toRecipients": [
                     {"emailAddress": {"address": str(recipient)}} for recipient in message.to
                 ],

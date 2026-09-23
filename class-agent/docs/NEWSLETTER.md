@@ -1,0 +1,108 @@
+# The Class Runtime: instructor-run weekly newsletter
+
+`python -m course_server.newsletter` is a staff command, not a Course Agent capability. It never
+runs from the website, and students cannot trigger it. It produces one issue per finished class
+week, shows the draft to the instructor, and sends email only after an explicit approval step.
+
+## What an issue contains
+
+Every issue follows the same skimmable shape:
+
+1. A short opening written for the week.
+2. Four highlights (configurable). Each one names the student, gives one or two lines on what the
+   build is, and one line on specifically how it relates to that week's hands-on assignment goal,
+   followed by a link to the deployed project site.
+3. A closing line.
+4. Every other course project, listed with its deployed site link.
+5. A closing quote from an AI or computing pioneer.
+6. The course line (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`) and a link
+   to the class website, `https://cognitive-agents.media.mit.edu`.
+
+The email subject is `The Class Runtime from MAS.S60`. Each message is sent as plain text with an
+HTML alternative so it reads well in ordinary mail clients.
+
+## Where each decision lives
+
+| Decision | Owner |
+| --- | --- |
+| Which week is "last week", and its assignment goal | Platform code, parsed from `shared/course/schedule/schedule.md` |
+| Which repositories exist and what can be read | The existing read-only GitHub catalog (`mitmedialab/agents2026-*`) |
+| Which projects are eligible to be featured | Platform code: the project changed something during the week and was not featured in the last `NEWSLETTER_HIGHLIGHT_COOLDOWN_ISSUES` sent issues |
+| Which eligible builds to feature and the prose | The configured model, from bounded evidence |
+| Highlight count, uniqueness, and the cooldown | Validated in code; a violating response is re-prompted once with the concrete problems, then rejected |
+| Links, project list, quote, footer, HTML escaping | Platform rendering code; the model cannot add links or addresses |
+| Whether anything is emailed, and to whom | The instructor, at `send` time |
+
+The model receives only repository names, derived labels, deployed site URLs, commit subjects,
+bounded Markdown/text documents from `weekly_builds/weekNN/`, and bounded deployed site text.
+It does not receive credentials, student email addresses, or account data.
+
+## Data sources and bounds
+
+For each course repository the collector reads, through the existing catalog:
+
+- the recursive tree, to count files under `weekly_builds/weekNN/` and `website/`;
+- up to six `.md`, `.txt`, or `.rst` documents from that week's folder, shallowest and README
+  first, each capped at 4,000 characters and 9,000 characters per project;
+- the 30 most recent commits, filtered to the week's window (class day through the day before the
+  next class, in `NEWSLETTER_TIMEZONE`);
+- the deployed site's readable text, capped at 2,500 characters, using the same public-network
+  fetch rules as the agent's web tools.
+
+Credential-like paths are refused by the catalog before any content is requested. One unreadable
+repository or site is noted in the evidence and does not stop the draft.
+
+## Commands
+
+```bash
+# Draft the most recently finished week (run from class-agent/ with .env configured).
+uv run python -m course_server.newsletter draft
+
+# Draft a specific week, or pretend today is a given date when choosing the week.
+uv run python -m course_server.newsletter draft --week 1
+uv run python -m course_server.newsletter draft --as-of 2026-09-22
+
+# Review a stored issue again, as text or HTML.
+uv run python -m course_server.newsletter show 2026-week01
+uv run python -m course_server.newsletter show 2026-week01 --html
+uv run python -m course_server.newsletter list
+
+# Send yourself a test copy; the issue stays a draft.
+uv run python -m course_server.newsletter send 2026-week01 --test-to you@mit.edu
+
+# Approve and send. Recipients are NEWSLETTER_RECIPIENTS plus --to plus, optionally, every
+# active student account. The command prints the full text and recipient list, then waits
+# for you to type SEND. Pass --yes only in a scripted context.
+uv run python -m course_server.newsletter send 2026-week01 --to-active-students
+uv run python -m course_server.newsletter send 2026-week01 --to list@example.edu --yes
+```
+
+If the draft is not right, edit nothing by hand; run `draft --week N` again to regenerate it. A week
+that was already sent is refused unless `--force` is passed, which produces a fresh draft.
+
+Drafting requires `GITHUB_STUDENT_PROJECTS_ENABLED=true`, a read-only `GITHUB_TOKEN`, and the
+model settings used by the agent. Sending requires the same `MAIL_*` settings as the mail worker;
+`--to-active-students` also requires `DATABASE_URL`. `show` and `list` need neither.
+
+Like the other CLIs, the command loads `.env` without overriding variables already exported in
+the shell. If a stale `OPENAI_API_KEY` is exported, the model request fails with
+`AuthenticationError`; run `unset OPENAI_API_KEY` first so the `.env` value is used.
+
+## Storage
+
+`NEWSLETTER_DATA_PATH` (default `var/newsletter/`, ignored by Git) holds `issues/<year>-weekNN.json`
+plus `.txt` and `.html` renderings for review. The JSON record stores the week, the validated
+model copy, the project roster with links, the quote, status (`draft` or `sent`), and one delivery
+row per recipient with the provider message ID or the sanitized error class. Sent issues are the
+source of the fairness rule and of quote rotation, so keep this directory in staff backups.
+
+Each recipient receives a separate message; other recipients' addresses are never included.
+Provider acceptance is recorded per recipient. A failed recipient is recorded and the issue stays a
+draft only if nobody received it; re-running `send` on a sent issue is refused.
+
+## Cost and failure behavior
+
+Each draft makes one model request (two if the first response breaks a rule) with roughly the
+size of the collected evidence, and a few hundred GitHub reads across the class. Provider failures
+surface as sanitized errors without response bodies. No newsletter code runs inside the API
+process or the Course Agent runtime.

@@ -970,3 +970,44 @@ def test_worker_rejects_reply_from_untrusted_sender() -> None:
         assert mail.sent == []
 
     asyncio.run(scenario())
+
+
+def test_gmail_adapter_sends_optional_html_as_a_multipart_alternative() -> None:
+    async def scenario() -> None:
+        sent_mime: list[bytes] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "oauth.test":
+                return httpx.Response(200, json={"access_token": "token", "expires_in": 3600})
+            payload = httpx.Response(200, content=request.read()).json()
+            sent_mime.append(base64.urlsafe_b64decode(payload["raw"]))
+            return httpx.Response(200, json={"id": "sent-html-1"})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        adapter = GoogleGmailMailAdapter(
+            client_id="client-id",
+            client_secret="client-secret",
+            refresh_token="refresh-token",
+            mailbox_address="course-agent@example.edu",
+            client=client,
+            gmail_base_url="https://gmail.test/gmail/v1",
+            token_url="https://oauth.test/token",
+        )
+        await adapter.send_message(
+            OutboundMail(
+                to=("student@example.edu",),
+                subject="Newsletter",
+                text="Plain body",
+                html="<p>Rich <b>body</b></p>",
+            )
+        )
+        await client.aclose()
+
+        parsed = BytesParser(policy=policy.default).parsebytes(sent_mime[0])
+        assert parsed.get_content_type() == "multipart/alternative"
+        plain = parsed.get_body(preferencelist=("plain",))
+        html = parsed.get_body(preferencelist=("html",))
+        assert plain is not None and plain.get_content().strip() == "Plain body"
+        assert html is not None and "<b>body</b>" in html.get_content()
+
+    asyncio.run(scenario())
