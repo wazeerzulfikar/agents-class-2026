@@ -8,22 +8,25 @@ week, shows the draft to the instructor, and sends email only after an explicit 
 
 Every issue follows the same skimmable shape:
 
-1. A punny headline about the week's assignment, the week's dates, the assignment itself, and a
-   roughly 100-word editorial on how the class did, synthesized from the staff notes on every
-   submission: what generally went well, then the common blockers framed constructively against
-   the week's learning goals. The editorial never names a student, never counts who submitted,
-   and never mentions the featured projects; the model sees the notes anonymized and uncounted,
-   and code rejects names, participation tallies, and overlong copy. It may add up to two
-   reference links in Markdown form; each URL is checked to resolve before it is accepted.
+1. A punny headline about the week's assignment, the week's dates, the assignment itself, and an
+   editorial of up to 150 words on how the class did against what was taught. The editorial call
+   receives the text of that week's slide deck from `shared/course/slides/week-NN/` and the
+   syllabus learning goals alongside the anonymized staff notes on every submission, and writes
+   two paragraphs: what went well and which lecture ideas the class absorbed, then the blind spots
+   (lecture ideas the submissions missed or misapplied) and common blockers, framed as what to
+   practice next. It never names a student, never counts who submitted, and never mentions the
+   featured projects; code rejects names, participation tallies, and overlong copy. It may add up
+   to two reference links in Markdown form; each URL is checked to resolve before it is accepted.
 2. Four highlights (configurable). Each one shows an image from the student's own post, names
    the student, and gives a headline plus two sentences: what the build is and what makes it
    interesting, then specifically how it does what the assignment asked. A link opens the site.
 3. Every other student who posted work that week, with one sentence on what they built and a
    link to their site. Students with nothing beyond the starter template are left off the list.
-4. A closing quote. Preferably a line from a student's own post that week: the scoring pass asks
-   each project for one inspiring sentence, code verifies it appears verbatim in that student's
-   collected prose, and the editorial call picks the best candidate, attributed and linked to the
-   student's site. When no verified candidate exists, a curated quote from an AI or computing
+4. A closing quote. Preferably a line from a student's own post that week, featured or not: the
+   scoring pass asks each project for up to three sentences with personality (surprising, funny,
+   candid, vivid; never a definition), code verifies each appears verbatim in that student's
+   collected prose, and the editorial call picks the one with the most personality, attributed and
+   linked to the student's site. When no verified candidate exists, a curated quote from an AI or computing
    pioneer is used instead, rotated across issues.
 5. The course line (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`) and a link
    to the class website, `https://cognitive-agents.media.mit.edu`.
@@ -150,6 +153,6 @@ draft only if nobody received it; re-running `send` on a sent issue is refused.
 Each draft makes one scoring request per active project, one editorial request, one image-choice
 request per featured build with candidates, and one highlight-copy request (each text request is
 retried once if the response breaks a rule), plus a few
-hundred GitHub reads across the class and one headless browser session per featured build. The `draft` command prints the total requests and input/output tokens it used; a week-1 run with 27 active projects used about 32 requests, 71,000 input tokens, and 9,000 output tokens. Provider failures
+hundred GitHub reads across the class and one headless browser session per featured build. The `draft` command prints the total requests and input/output tokens it used; a week-1 run with 27 active projects used about 32 requests, 78,000 input tokens, and 11,000 output tokens, roughly $0.30 at GPT-5.6 Terra prices. Provider failures
 surface as sanitized errors without response bodies. No newsletter code runs inside the API
 process or the Course Agent runtime.

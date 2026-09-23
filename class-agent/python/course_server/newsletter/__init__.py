@@ -35,6 +35,12 @@ from .images import (
     discover_week_pages,
     filter_candidates,
 )
+from .lecture import (
+    LectureNotes,
+    compact_slides_text,
+    learning_goals_from_syllabus,
+    load_lecture_notes,
+)
 from .models import (
     CommitSummary,
     CourseWeek,
@@ -93,6 +99,7 @@ __all__ = [
     "HighlightImageFinder",
     "ImageCandidate",
     "ImageJudge",
+    "LectureNotes",
     "LinkChecker",
     "NewsletterBranding",
     "NewsletterCompositionError",
@@ -123,6 +130,7 @@ __all__ = [
     "build_judge_prompt",
     "choose_quote",
     "cid_image_source",
+    "compact_slides_text",
     "compose_editorial",
     "compose_highlights",
     "compose_newsletter",
@@ -132,7 +140,9 @@ __all__ = [
     "encode_jpeg",
     "filter_candidates",
     "issue_id_for",
+    "learning_goals_from_syllabus",
     "link_resolves",
+    "load_lecture_notes",
     "load_schedule",
     "normalize_recipients",
     "parse_schedule",

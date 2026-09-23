@@ -18,6 +18,7 @@ import httpx
 from openai import OpenAI, OpenAIError
 from pydantic import SecretStr, ValidationError
 
+from .lecture import LectureNotes
 from .models import (
     Highlight,
     NewsletterBranding,
@@ -39,8 +40,8 @@ EDITORIAL_SCHEMA: dict[str, object] = {
         "editorial": {
             "type": "string",
             "description": (
-                "About 100 words on how the class did, in one or two short paragraphs. "
-                "Reference links, if any, use Markdown [text](https://url) syntax."
+                "Up to 150 words on how the class did against what was taught, in two short "
+                "paragraphs. Reference links, if any, use Markdown [text](https://url) syntax."
             ),
         },
         "quote_choice": {
@@ -89,7 +90,7 @@ MAX_EDITORIAL_LINKS = 2
 _BANNED_WORDS = re.compile(r"\b(brief|rubric)\b", re.IGNORECASE)
 # Brevity is part of the format; the model is re-prompted with the exact overrun.
 WORD_LIMITS: dict[str, int] = {"headline": 12, "description": 48}
-EDITORIAL_WORDS = (80, 125)
+EDITORIAL_WORDS = (90, 155)
 
 
 class LinkChecker(Protocol):
@@ -242,17 +243,23 @@ def build_editorial_system_prompt(branding: NewsletterBranding) -> str:
         "and editorial, and pick the closing quote.\n"
         "- headline: at most 12 words, a pun or playful turn on this week's assignment itself "
         "(what the class was asked to build), not a generic line about highlights.\n"
-        "- editorial: about 100 words (between 85 and 120), one or two short paragraphs, "
-        "speaking to the class directly. First, what generally went well across the class. "
-        "Then the common blockers, framed constructively in terms of the week's learning goals: "
-        "what the difficulty teaches and what to practice next, not a complaint. Never name a "
-        "student. Never state how many people submitted, posted, or struggled; no counts or "
-        "proportions of the class at all. Do not mention the featured projects; the highlights "
-        "and the full list follow separately. When a specific reference genuinely helps (a "
-        "paper, documentation, or tutorial you are certain exists), add at most two links using "
-        "Markdown [text](https://url) syntax; otherwise add none. Never invent a URL.\n"
+        "- editorial: up to 150 words (between 100 and 150), two short paragraphs, speaking "
+        "to the class directly. Read the lecture slides for the week the assignment was given "
+        "and judge the submissions against them. First: what generally went well, and which "
+        "ideas from the lecture the class clearly absorbed. Second: the blind spots, meaning "
+        "ideas the lecture emphasized that the submissions largely missed, skipped, or "
+        "misapplied, plus the common blockers, all framed constructively in terms of the "
+        "learning goals: what the gap teaches and what to practice next, not a complaint. Never "
+        "name a student. Never state how many people submitted, posted, or struggled; no counts "
+        "or proportions of the class at all. Do not mention the featured projects; the "
+        "highlights and the full list follow separately. When a specific reference genuinely "
+        "helps (a paper, documentation, or tutorial you are certain exists), add at most two "
+        "links using Markdown [text](https://url) syntax; otherwise add none. Never invent a "
+        "URL.\n"
         "- quote_choice: from the candidate quotes taken from students' own posts, choose the "
-        "one that would most inspire the class as a closing line, or 0 if none is good enough."
+        "one with the most personality as a closing line: surprising, funny, candid, or vivid. "
+        "Reject definitions, restatements of the assignment, and anything a textbook could "
+        "have said; answer 0 rather than pick a bland one."
     )
 
 
@@ -311,13 +318,13 @@ def _week_header(digest: WeeklyDigest) -> list[str]:
 def quote_candidates(
     digest: WeeklyDigest, scores: Sequence[ProjectScore]
 ) -> tuple[tuple[str, str, str], ...]:
-    """(project_id, label, verified quote) for every student whose post offered one."""
+    """(project_id, label, verified quote) for every line a student's post offered."""
 
     labels = {project.project_id: project.label for project in digest.projects}
     return tuple(
-        (score.project_id, labels.get(score.project_id, score.project_id), score.quote)
+        (score.project_id, labels.get(score.project_id, score.project_id), quote)
         for score in scores
-        if score.quote
+        for quote in score.quotes
     )
 
 
@@ -325,6 +332,7 @@ def build_editorial_user_prompt(
     digest: WeeklyDigest,
     scores: Sequence[ProjectScore],
     *,
+    lecture: LectureNotes | None = None,
     feedback: tuple[str, ...] = (),
 ) -> str:
     """Notes are anonymized and uncounted so the editorial cannot name or tally students."""
@@ -332,6 +340,15 @@ def build_editorial_user_prompt(
     scored = {score.project_id: score for score in scores}
     active = [project for project in digest.projects if project.active]
     sections = _week_header(digest)
+    if lecture is not None:
+        suffix = " (excerpt)" if lecture.truncated else ""
+        sections.append(
+            f"## What was taught this week: {lecture.title}{suffix}\n{lecture.slides_text}"
+        )
+        if lecture.learning_goals:
+            sections.append(f"## Course learning goals (syllabus)\n{lecture.learning_goals}")
+    else:
+        sections.append("## What was taught this week\nNo slide deck is published for this week.")
     if feedback:
         sections.append(
             "Your previous attempt was rejected for these reasons; fix all of them:\n"
@@ -485,6 +502,7 @@ def compose_editorial(
     writer: NewsletterWriter,
     *,
     branding: NewsletterBranding,
+    lecture: LectureNotes | None = None,
     link_checker: LinkChecker | None = link_resolves,
     max_attempts: int = 3,
 ) -> EditorialDraft:
@@ -498,7 +516,9 @@ def compose_editorial(
         payload = _parse(
             writer.write(
                 system_prompt=system_prompt,
-                user_prompt=build_editorial_user_prompt(digest, scores, feedback=feedback),
+                user_prompt=build_editorial_user_prompt(
+                    digest, scores, lecture=lecture, feedback=feedback
+                ),
                 schema=EDITORIAL_SCHEMA,
             )
         )
@@ -562,11 +582,14 @@ def compose_newsletter(
     *,
     selected: Sequence[str],
     branding: NewsletterBranding,
+    lecture: LectureNotes | None = None,
     link_checker: LinkChecker | None = link_resolves,
 ) -> tuple[NewsletterCopy, tuple[str, str, str] | None]:
     """The issue's copy plus the chosen student quote as (project_id, label, text), if any."""
 
-    draft = compose_editorial(digest, scores, writer, branding=branding, link_checker=link_checker)
+    draft = compose_editorial(
+        digest, scores, writer, branding=branding, lecture=lecture, link_checker=link_checker
+    )
     highlights = compose_highlights(digest, writer, selected=selected, branding=branding)
     candidates = quote_candidates(digest, scores)
     chosen = candidates[draft.quote_choice - 1] if draft.quote_choice > 0 else None

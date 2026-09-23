@@ -15,6 +15,8 @@ from course_server.config import ConfigurationError
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_NEWSLETTER_DATA_PATH = PROJECT_ROOT / "var/newsletter"
 DEFAULT_SCHEDULE_PATH = PROJECT_ROOT / "shared/course/schedule/schedule.md"
+DEFAULT_SLIDES_PATH = PROJECT_ROOT / "shared/course/slides"
+DEFAULT_SYLLABUS_PATH = PROJECT_ROOT / "shared/course/syllabus/syllabus.md"
 ISSUE_ID_PATTERN = r"^[0-9]{4}-week[0-9]{2}$"
 
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
@@ -50,6 +52,8 @@ class NewsletterSettings(NewsletterModel):
     recipients: tuple[EmailStr, ...] = ()
     data_path: Path = DEFAULT_NEWSLETTER_DATA_PATH
     schedule_path: Path = DEFAULT_SCHEDULE_PATH
+    slides_path: Path = DEFAULT_SLIDES_PATH
+    syllabus_path: Path = DEFAULT_SYLLABUS_PATH
 
     @classmethod
     def from_environment(cls, values: Mapping[str, str]) -> NewsletterSettings:
@@ -94,6 +98,8 @@ class NewsletterSettings(NewsletterModel):
             recipients=recipients,
             data_path=path("NEWSLETTER_DATA_PATH", DEFAULT_NEWSLETTER_DATA_PATH),
             schedule_path=path("NEWSLETTER_SCHEDULE_PATH", DEFAULT_SCHEDULE_PATH),
+            slides_path=path("NEWSLETTER_SLIDES_PATH", DEFAULT_SLIDES_PATH),
+            syllabus_path=path("NEWSLETTER_SYLLABUS_PATH", DEFAULT_SYLLABUS_PATH),
         )
 
 
@@ -188,8 +194,10 @@ class ProjectScore(NewsletterModel):
     built: Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)] = ""
     went_well: Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)] = ""
     struggled: Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)] = ""
-    # A verbatim, platform-verified sentence from the student's own writing, or empty.
-    quote: Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)] = ""
+    # Verbatim, platform-verified sentences from the student's own writing.
+    quotes: tuple[
+        Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)], ...
+    ] = ()
     eligible: bool = True
 
 

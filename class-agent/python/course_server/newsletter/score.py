@@ -53,12 +53,15 @@ SCORE_SCHEMA: dict[str, object] = {
             "type": "string",
             "description": "At most 25 words: what the student struggled with or left missing.",
         },
-        "quote": {
-            "type": "string",
+        "quotes": {
+            "type": "array",
+            "items": {"type": "string"},
             "description": (
-                "One sentence copied exactly, character for character, from the student's own "
-                "prose (not code, headings, or assignment text) that is insightful or inspiring "
-                "about building agents; at most 30 words; empty string if nothing qualifies."
+                "Up to three sentences copied exactly, character for character, from the "
+                "student's own prose (not code, headings, or assignment text) that would make "
+                "a memorable closing line: surprising, funny, candid about a failure, or a vivid "
+                "way of seeing agents. Never a definition or a restatement of the assignment. "
+                "Each at most 30 words. Empty list if nothing has personality."
             ),
         },
     },
@@ -70,7 +73,7 @@ SCORE_SCHEMA: dict[str, object] = {
         "built",
         "went_well",
         "struggled",
-        "quote",
+        "quotes",
     ],
     "additionalProperties": False,
 }
@@ -103,10 +106,11 @@ def build_score_system_prompt(branding: NewsletterBranding) -> str:
         "saying what the student built, naming the project if it has a name; `went_well` and "
         "`struggled`, each at most 25 words, describing what worked and where the student had "
         "difficulty or left gaps, so an editor can summarize the week. Refer to the student by "
-        "the label. Finally, `quote`: if the student's own prose contains a sentence that is "
-        "genuinely insightful or inspiring about building agents, copy it exactly as written "
-        "(it will be checked verbatim against the source); otherwise return an empty string. "
-        "Respond with JSON matching the schema and nothing else."
+        "the label. Finally, `quotes`: up to three sentences from the student's own prose that "
+        "have personality (a surprising observation, a candid failure, a joke that lands, a vivid "
+        "metaphor), copied exactly as written because each is checked verbatim against the "
+        "source; skip definitions and assignment restatements, and return an empty list rather "
+        "than something bland. Respond with JSON matching the schema and nothing else."
     )
 
 
@@ -171,7 +175,11 @@ def parse_score(raw: str, *, project_id: str, eligible: bool) -> ProjectScore:
             built=str(payload.get("built", ""))[:300],
             went_well=str(payload.get("went_well", ""))[:400],
             struggled=str(payload.get("struggled", ""))[:400],
-            quote=str(payload.get("quote", ""))[:400],
+            quotes=tuple(
+                str(item)[:400]
+                for item in (payload.get("quotes") or [])
+                if isinstance(item, str) and item.strip()
+            )[:3],
             eligible=eligible,
         )
     except (TypeError, ValueError, ValidationError) as error:
@@ -205,9 +213,14 @@ def score_projects(
             score = parse_score(
                 raw, project_id=project.project_id, eligible=project.project_id in eligible
             )
-            if score.quote and not verify_quote(score.quote, project):
-                say(f"  {project.project_id}: quote was not verbatim; dropped")
-                score = score.model_copy(update={"quote": ""})
+            verified: list[str] = []
+            for quote in score.quotes:
+                kept = verify_quote(quote, project)
+                if kept and kept not in verified:
+                    verified.append(kept)
+                elif not kept:
+                    say(f"  {project.project_id}: quote was not verbatim; dropped")
+            score = score.model_copy(update={"quotes": tuple(verified)})
         except NewsletterScoringError as error:
             say(f"  {project.project_id}: not scored ({error})")
             return None

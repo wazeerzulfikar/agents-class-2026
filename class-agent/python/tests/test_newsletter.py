@@ -23,6 +23,7 @@ from course_server.newsletter import (
     FoundImage,
     Highlight,
     HighlightImage,
+    LectureNotes,
     NewsletterBranding,
     NewsletterCompositionError,
     NewsletterCopy,
@@ -45,10 +46,13 @@ from course_server.newsletter import (
     build_highlights_user_prompt,
     choose_quote,
     cid_image_source,
+    compact_slides_text,
     compose_editorial,
     compose_highlights,
     compose_newsletter,
     encode_jpeg,
+    learning_goals_from_syllabus,
+    load_lecture_notes,
     parse_schedule,
     project_label,
     render_html,
@@ -323,7 +327,7 @@ def score_json(goal_fit: int, interest: int, execution: int, rationale: str = "o
             "built": "A tidy agent loop.",
             "went_well": "Clear loop.",
             "struggled": "Thin docs.",
-            "quote": "",
+            "quotes": [],
         }
     )
 
@@ -455,9 +459,14 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
             built="Ada built a loop.",
             went_well="Clean loop.",
             struggled="Sparse tests.",
-            quote="Agents learn best when reality gets a vote.",
+            quotes=("Agents learn best when reality gets a vote.", "My loop ate my homework."),
         ),
         ProjectScore(project_id="agents2026-grace", interest=5, execution=5, goal_fit=6, total=5.4),
+    )
+    lecture = LectureNotes(
+        title="Week 1 slides",
+        slides_text="What is an agent? Senses, acts, maintains state, learns.",
+        learning_goals="1. Build functional AI agents.",
     )
 
     def link_checker(url: str) -> bool:
@@ -465,7 +474,9 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
 
     writer = ScriptedWriter([], editorials=[editorial_json("Loop, There It Is", quote_choice=1)])
 
-    draft = compose_editorial(digest, scores, writer, branding=branding, link_checker=link_checker)
+    draft = compose_editorial(
+        digest, scores, writer, branding=branding, lecture=lecture, link_checker=link_checker
+    )
 
     assert (draft.headline, draft.editorial, draft.quote_choice) == (
         "Loop, There It Is",
@@ -476,7 +487,11 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
     assert "Submission 1: built: Ada built a loop. / went well: Clean loop." in prompt
     assert "students;" not in prompt and "Nothing posted" not in prompt
     assert '1. "Agents learn best when reality gets a vote." \u2014 Ada' in prompt
-    assert prompt == build_editorial_user_prompt(digest, scores)
+    assert '2. "My loop ate my homework." \u2014 Ada' in prompt
+    assert "## What was taught this week: Week 1 slides\nWhat is an agent?" in prompt
+    assert "## Course learning goals (syllabus)\n1. Build functional AI agents." in prompt
+    assert prompt == build_editorial_user_prompt(digest, scores, lecture=lecture)
+    assert "No slide deck is published" in build_editorial_user_prompt(digest, scores)
 
     # Names, participation counts, long copy, and dead links are all rejected with feedback.
     names = ["Ada", "Grace", "Hal", "Idle"]
@@ -494,7 +509,7 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
         for item in validate_editorial("Fine", EDITORIAL + " 12 students struggled.")
     )
     assert any(
-        "write between 80 and 125" in item
+        "write between 90 and 155" in item
         for item in validate_editorial("Fine", " ".join(["word"] * 200))
     )
     linked = EDITORIAL + " See [the ReAct paper](https://good.example/react) for more."
@@ -520,7 +535,7 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
     )
     retried = compose_editorial(digest, scores, short, branding=branding, link_checker=None)
     assert retried.editorial == EDITORIAL
-    assert "editorial has 2 words; write between 80 and 125" in short.editorial_prompts[1]
+    assert "editorial has 2 words; write between 90 and 155" in short.editorial_prompts[1]
     with pytest.raises(NewsletterCompositionError, match="editorial broke platform rules"):
         compose_editorial(
             digest,
@@ -533,13 +548,48 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
     copy, chosen = compose_newsletter(
         digest,
         scores,
-        ScriptedWriter([copy_json("agents2026-ada")], editorials=[editorial_json(quote_choice=1)]),
+        ScriptedWriter([copy_json("agents2026-ada")], editorials=[editorial_json(quote_choice=2)]),
         selected=("agents2026-ada",),
         branding=branding,
         link_checker=None,
     )
     assert copy.headline == "Loop, There It Is" and len(copy.highlights) == 1
-    assert chosen == ("agents2026-ada", "Ada", "Agents learn best when reality gets a vote.")
+    assert chosen == ("agents2026-ada", "Ada", "My loop ate my homework.")
+
+
+def test_lecture_notes_come_from_the_week_deck_and_syllabus_goals(tmp_path: Path) -> None:
+    slides = tmp_path / "slides" / "week-01"
+    slides.mkdir(parents=True)
+    (slides / "resource.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "resource": {
+                    "uri": "course://slides/week-01",
+                    "title": "Agents 101",
+                    "media_type": "text/markdown",
+                    "file": "deck.md",
+                },
+            }
+        )
+    )
+    (slides / "deck.md").write_text(
+        "--- Page 1 ---\nWhat   is an agent?\n\n\n\n--- Page 2 ---\nSenses, acts, learns.\n"
+    )
+    syllabus = tmp_path / "syllabus.md"
+    syllabus.write_text(
+        "# Course\n\n## **Learning Goals**\n\n1. Build agents.\n2. Evaluate them.\n\n"
+        "## Structure\n\nWeekly.\n"
+    )
+
+    notes = load_lecture_notes(tmp_path / "slides", syllabus, weeks()[0])
+
+    assert notes is not None and notes.title == "Agents 101" and notes.truncated is False
+    assert notes.slides_text == "What is an agent?\n\nSenses, acts, learns."
+    assert notes.learning_goals == "1. Build agents.\n2. Evaluate them."
+    assert load_lecture_notes(tmp_path / "slides", syllabus, weeks()[1]) is None
+    assert compact_slides_text("a " * 50, limit=20) == ("a a a a a a a a a a", True)
+    assert learning_goals_from_syllabus("# No goals here\n") == ""
 
 
 def test_verify_quote_accepts_only_verbatim_student_prose() -> None:
@@ -853,6 +903,7 @@ def make_service(
         writer=writer,
         image_finder=FakeImageFinder(),
         link_checker=None,
+        lecture_loader=lambda week: None,
         model_id="test-model",
         clock=lambda: datetime(2026, 9, 22, 15, 0, tzinfo=UTC),
     )
@@ -959,7 +1010,7 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         [copy_json("agents2026-grace")],
         scores={
             "agents2026-grace": score_json(9, 8, 8).replace(
-                '"quote": ""', '"quote": "Tools! Tools are how an agent touches the world."'
+                '"quotes": []', '"quotes": ["Tools! Tools are how an agent touches the world."]'
             )
         },
         editorials=[editorial_json(quote_choice=1)],
@@ -994,6 +1045,7 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         writer=week2_writer,
         image_finder=FakeImageFinder(fail_for={"https://mitmedialab.github.io/agents2026-grace/"}),
         link_checker=None,
+        lecture_loader=lambda week: None,
         clock=lambda: datetime(2026, 9, 29, 15, 0, tzinfo=UTC),
     )
     week2 = service2.draft()

@@ -19,6 +19,7 @@ from .compose import (
     link_resolves,
 )
 from .images import HighlightImageFinder
+from .lecture import LectureNotes, load_lecture_notes
 from .models import (
     CourseWeek,
     Delivery,
@@ -76,6 +77,7 @@ class NewsletterService:
         writer: NewsletterWriter | None = None,
         image_finder: HighlightImageFinder | None = None,
         link_checker: LinkChecker | None = link_resolves,
+        lecture_loader: Callable[[CourseWeek], LectureNotes | None] | None = None,
         quotes: tuple[PioneerQuote, ...] = PIONEER_QUOTES,
         model_id: str | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -87,6 +89,9 @@ class NewsletterService:
         self._writer = writer
         self._image_finder = image_finder
         self._link_checker = link_checker
+        self._lecture_loader = lecture_loader or (
+            lambda week: load_lecture_notes(settings.slides_path, settings.syllabus_path, week)
+        )
         self._store = store
         self._quotes = quotes
         self._model_id = model_id
@@ -138,12 +143,19 @@ class NewsletterService:
             raise NewsletterCompositionError("No eligible project could be scored this week.")
         self._log("Selected: " + ", ".join(selected))
         images = self._find_images(issue_id, selected, evidence, week, scores)
+        lecture = self._lecture_loader(week)
+        self._log(
+            f"Lecture notes: {lecture.title} ({len(lecture.slides_text)} chars)"
+            if lecture is not None
+            else "Lecture notes: none published for this week."
+        )
         copy, student_quote = compose_newsletter(
             digest,
             scores,
             self._writer,
             selected=selected,
             branding=self._settings.branding,
+            lecture=lecture,
             link_checker=self._link_checker,
         )
         sites = {item.project_id: item.site_url for item in evidence}
