@@ -308,7 +308,7 @@ def copy_json(*project_ids: str, extra: str = "") -> str:
     )
 
 
-EDITORIAL = " ".join(["Everyone looped."] * 48)
+EDITORIAL = " ".join(["Everyone looped."] * 55)
 
 
 def editorial_json(
@@ -508,8 +508,16 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
         "count participation" in item
         for item in validate_editorial("Fine", EDITORIAL + " 12 students struggled.")
     )
+    borrowed = EDITORIAL + " Do not become a horoscope in a trench coat."
     assert any(
-        "write between 90 and 155" in item
+        'reuse wording from a candidate quote (found "a horoscope in a trench")' in item
+        for item in validate_editorial(
+            "Fine", borrowed, quotes=["Otherwise it's a horoscope in a trench coat."]
+        )
+    )
+    assert validate_editorial("Fine", EDITORIAL, quotes=["Otherwise it's a horoscope."]) == ()
+    assert any(
+        "write between 100 and 165" in item
         for item in validate_editorial("Fine", " ".join(["word"] * 200))
     )
     linked = EDITORIAL + " See [the ReAct paper](https://good.example/react) for more."
@@ -535,7 +543,7 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
     )
     retried = compose_editorial(digest, scores, short, branding=branding, link_checker=None)
     assert retried.editorial == EDITORIAL
-    assert "editorial has 2 words; write between 90 and 155" in short.editorial_prompts[1]
+    assert "editorial has 2 words; write between 100 and 165" in short.editorial_prompts[1]
     with pytest.raises(NewsletterCompositionError, match="editorial broke platform rules"):
         compose_editorial(
             digest,
@@ -613,8 +621,45 @@ def test_verify_quote_accepts_only_verbatim_student_prose() -> None:
     )
     assert verify_quote("\u201cthe loop is the lesson\u201d every week.", project) != ""
     assert verify_quote("Agents learn best when reality votes.", project) == ""
+    spiral = ProjectEvidence(
+        project_id="agents2026-egemen",
+        label="Egemen",
+        week_file_count=1,
+        site_file_count=1,
+        commit_count=1,
+        documents=(
+            ProjectDocument(
+                path="weekly_builds/week01/README.md",
+                text=(
+                    "## Why\n\nThe agent has to earn its calm with visible reasoning steps. "
+                    "Otherwise it's a horoscope in a trench coat. "
+                    "Even a happy prompt gets spiraled."
+                ),
+            ),
+        ),
+    )
+    assert verify_quote("Otherwise it's a horoscope in a trench coat.", spiral) == (
+        "The agent has to earn its calm with visible reasoning steps. "
+        "Otherwise it's a horoscope in a trench coat."
+    )
+    assert verify_quote("Even a happy prompt gets spiraled.", spiral) == (
+        "Even a happy prompt gets spiraled."
+    )
+    heading_only = spiral.model_copy(
+        update={
+            "documents": (
+                ProjectDocument(
+                    path="weekly_builds/week01/README.md",
+                    text="## Why\n\nOtherwise it's a horoscope in a trench coat.",
+                ),
+            )
+        }
+    )
+    assert verify_quote("Otherwise it's a horoscope in a trench coat.", heading_only) == (
+        "Otherwise it's a horoscope in a trench coat."
+    )
     assert verify_quote("Short quote here.", project) == ""
-    assert verify_quote(" ".join(["word"] * 31), project) == ""
+    assert verify_quote(" ".join(["word"] * 41), project) == ""
 
 
 def sample_issue(*, status: str = "draft") -> NewsletterIssue:

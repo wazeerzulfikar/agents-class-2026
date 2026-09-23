@@ -7,6 +7,7 @@ weights, the goal-fit gate, the cooldown, tie-breaking, and the final selection.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
@@ -40,9 +41,10 @@ SCORE_SCHEMA: dict[str, object] = {
         "built": {
             "type": "string",
             "description": (
-                "One plain sentence, at most 18 words, saying what the student built this "
-                "week, written for the class list: no mention of evidence, assessment, or "
-                "what is missing. If only a site exists, say what the site is."
+                "One plain sentence, at most 18 words, describing the build itself (its name "
+                "if it has one, what it does, what it is made of), written for the class list. "
+                "Do not include the student's name; no mention of evidence, assessment, or what "
+                "is missing. If only a site exists, say what the site is."
             ),
         },
         "went_well": {
@@ -57,11 +59,13 @@ SCORE_SCHEMA: dict[str, object] = {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "Up to three sentences copied exactly, character for character, from the "
+                "Up to three passages copied exactly, character for character, from the "
                 "student's own prose (not code, headings, or assignment text) that would make "
                 "a memorable closing line: surprising, funny, candid about a failure, or a vivid "
-                "way of seeing agents. Never a definition or a restatement of the assignment. "
-                "Each at most 30 words. Empty list if nothing has personality."
+                "way of seeing agents. Each passage must stand on its own: one to two consecutive "
+                "sentences, at most 40 words, including any sentence a punchline depends on. "
+                "Never a definition or a restatement of the assignment. Empty list if nothing "
+                "has personality."
             ),
         },
     },
@@ -106,11 +110,13 @@ def build_score_system_prompt(branding: NewsletterBranding) -> str:
         "saying what the student built, naming the project if it has a name; `went_well` and "
         "`struggled`, each at most 25 words, describing what worked and where the student had "
         "difficulty or left gaps, so an editor can summarize the week. Refer to the student by "
-        "the label. Finally, `quotes`: up to three sentences from the student's own prose that "
+        "the label. Finally, `quotes`: up to three passages from the student's own prose that "
         "have personality (a surprising observation, a candid failure, a joke that lands, a vivid "
         "metaphor), copied exactly as written because each is checked verbatim against the "
-        "source; skip definitions and assignment restatements, and return an empty list rather "
-        "than something bland. Respond with JSON matching the schema and nothing else."
+        "source. A passage must make sense on its own: if the line you like is a punchline, "
+        "include the consecutive sentence before it that sets it up, within 40 words in total. "
+        "Skip definitions and assignment restatements, and return an empty list rather than "
+        "something bland. Respond with JSON matching the schema and nothing else."
     )
 
 
@@ -127,7 +133,7 @@ def build_score_user_prompt(week: CourseWeek, project: ProjectEvidence) -> str:
     )
 
 
-_QUOTE_MAX_WORDS = 30
+_QUOTE_MAX_WORDS = 40
 _QUOTE_MIN_CHARS = 25
 _NORMALIZE = str.maketrans({"\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"'})
 
@@ -136,16 +142,70 @@ def _normalize(value: str) -> str:
     return " ".join(value.translate(_NORMALIZE).split()).casefold()
 
 
+# A quote opening with one of these leans on the sentence before it; that sentence is added.
+_DEPENDENT_OPENERS = frozenset(
+    {
+        "otherwise",
+        "but",
+        "so",
+        "and",
+        "because",
+        "which",
+        "that",
+        "this",
+        "it",
+        "then",
+        "still",
+        "yet",
+        "instead",
+        "also",
+        "hence",
+        "thus",
+        "therefore",
+        "unfortunately",
+        "except",
+    }
+)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _corpus(project: ProjectEvidence) -> str:
+    return "\n".join([*(document.text for document in project.documents), project.site_text or ""])
+
+
+def complete_quote(quote: str, project: ProjectEvidence) -> str:
+    """Prepend the sentence a dependent opener relies on, when it is a real sentence."""
+
+    words = quote.split()
+    if (
+        not words
+        or words[0].strip("\"'\u201c\u201d(").casefold().rstrip(",") not in _DEPENDENT_OPENERS
+    ):
+        return quote
+    sentences = [part.strip() for part in _SENTENCE_SPLIT.split(_corpus(project)) if part.strip()]
+    target = _normalize(quote)
+    for index, sentence in enumerate(sentences):
+        if index == 0 or not target.startswith(_normalize(sentence)[: len(target)]):
+            continue
+        # Only the last paragraph before the quote counts; headings and lists are not setup.
+        previous = " ".join(re.split(r"\n\s*\n", sentences[index - 1])[-1].split())
+        if not previous.endswith((".", "!", "?")) or len(previous.split()) < 4:
+            return quote
+        combined = f"{previous} {quote}"
+        return combined if len(combined.split()) <= _QUOTE_MAX_WORDS else quote
+    return quote
+
+
 def verify_quote(quote: str, project: ProjectEvidence) -> str:
     """Return the quote only if it appears verbatim in the student's collected prose."""
 
     candidate = " ".join(quote.split()).strip().strip('"\u201c\u201d')
     if len(candidate) < _QUOTE_MIN_CHARS or len(candidate.split()) > _QUOTE_MAX_WORDS:
         return ""
-    corpus = _normalize(
-        "\n".join([*(document.text for document in project.documents), project.site_text or ""])
-    )
-    return candidate if _normalize(candidate) in corpus else ""
+    if _normalize(candidate) not in _normalize(_corpus(project)):
+        return ""
+    completed = complete_quote(candidate, project)
+    return completed if _normalize(completed) in _normalize(_corpus(project)) else candidate
 
 
 def parse_score(raw: str, *, project_id: str, eligible: bool) -> ProjectScore:

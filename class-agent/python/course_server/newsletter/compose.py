@@ -90,7 +90,7 @@ MAX_EDITORIAL_LINKS = 2
 _BANNED_WORDS = re.compile(r"\b(brief|rubric)\b", re.IGNORECASE)
 # Brevity is part of the format; the model is re-prompted with the exact overrun.
 WORD_LIMITS: dict[str, int] = {"headline": 12, "description": 48}
-EDITORIAL_WORDS = (90, 155)
+EDITORIAL_WORDS = (100, 165)
 
 
 class LinkChecker(Protocol):
@@ -243,23 +243,29 @@ def build_editorial_system_prompt(branding: NewsletterBranding) -> str:
         "and editorial, and pick the closing quote.\n"
         "- headline: at most 12 words, a pun or playful turn on this week's assignment itself "
         "(what the class was asked to build), not a generic line about highlights.\n"
-        "- editorial: up to 150 words (between 100 and 150), two short paragraphs, speaking "
+        "- editorial: at most 150 words (count them; between 110 and 150), two short "
+        "paragraphs, speaking "
         "to the class directly. Read the lecture slides for the week the assignment was given "
         "and judge the submissions against them. First: what generally went well, and which "
         "ideas from the lecture the class clearly absorbed. Second: the blind spots, meaning "
         "ideas the lecture emphasized that the submissions largely missed, skipped, or "
         "misapplied, plus the common blockers, all framed constructively in terms of the "
-        "learning goals: what the gap teaches and what to practice next, not a complaint. Never "
-        "name a student. Never state how many people submitted, posted, or struggled; no counts "
-        "or proportions of the class at all. Do not mention the featured projects; the "
-        "highlights and the full list follow separately. When a specific reference genuinely "
-        "helps (a paper, documentation, or tutorial you are certain exists), add at most two "
-        "links using Markdown [text](https://url) syntax; otherwise add none. Never invent a "
-        "URL.\n"
+        "learning goals: what the gap teaches and what to practice next, not a complaint. Have "
+        "fun with it and be concrete: point at actual builds by what they are (a rolling-ball "
+        "physics world, a Downloads-folder renamer, a town of pixel townspeople), the odd "
+        "failure modes that showed up, and the lecture's own phrases, so it reads like a note "
+        "from someone who looked at everything. Never name a student. Never state how many "
+        "people submitted, posted, or struggled; no counts or proportions of the class at all. "
+        "Do not single out the featured projects as such; the highlights and the full list "
+        "follow separately. Do not reuse wording from the candidate closing quotes; the chosen "
+        "quote closes the issue on its own. When a specific reference genuinely helps (a paper, "
+        "documentation, or tutorial you are certain exists), add at most two links using "
+        "Markdown [text](https://url) syntax; otherwise add none. Never invent a URL.\n"
         "- quote_choice: from the candidate quotes taken from students' own posts, choose the "
-        "one with the most personality as a closing line: surprising, funny, candid, or vivid. "
-        "Reject definitions, restatements of the assignment, and anything a textbook could "
-        "have said; answer 0 rather than pick a bland one."
+        "one with the most personality as a closing line: surprising, funny, candid, or vivid, "
+        "and complete enough to make sense to someone who has not read the post. Reject "
+        "definitions, restatements of the assignment, fragments that depend on missing context, "
+        "and anything a textbook could have said; answer 0 rather than pick a bland one."
     )
 
 
@@ -426,11 +432,24 @@ def _text_problems(value: str, *, field_name: str, owner: str = "") -> list[str]
     return problems
 
 
+def _reused_phrase(editorial: str, quote: str, *, window: int = 5) -> str | None:
+    """A run of `window` consecutive quote words that also appears in the editorial."""
+
+    prose = " ".join(re.sub(r"[^\w\s]", " ", editorial).split()).casefold()
+    words = re.sub(r"[^\w\s]", " ", quote).split()
+    for start in range(0, max(0, len(words) - window + 1)):
+        phrase = " ".join(words[start : start + window]).casefold()
+        if phrase in prose:
+            return " ".join(words[start : start + window])
+    return None
+
+
 def validate_editorial(
     headline: str,
     editorial: str,
     *,
     names: Sequence[str] = (),
+    quotes: Sequence[str] = (),
     link_checker: LinkChecker | None = None,
 ) -> tuple[str, ...]:
     problems = _text_problems(headline, field_name="headline")
@@ -451,6 +470,13 @@ def validate_editorial(
     tally = _PARTICIPATION_COUNT.search(prose)
     if tally is not None:
         problems.append(f'editorial must not count participation (found "{tally.group(0)}")')
+    for quote in quotes:
+        reused = _reused_phrase(prose, quote)
+        if reused is not None:
+            problems.append(
+                f'editorial must not reuse wording from a candidate quote (found "{reused}")'
+            )
+            break
     if len(links) > MAX_EDITORIAL_LINKS:
         problems.append(f"editorial has {len(links)} links; the limit is {MAX_EDITORIAL_LINKS}")
     for _, url in links:
@@ -504,7 +530,7 @@ def compose_editorial(
     branding: NewsletterBranding,
     lecture: LectureNotes | None = None,
     link_checker: LinkChecker | None = link_resolves,
-    max_attempts: int = 3,
+    max_attempts: int = 4,
 ) -> EditorialDraft:
     """Headline, editorial, and quote choice from the class's notes; re-prompted on rule breaks."""
 
@@ -528,7 +554,13 @@ def compose_editorial(
         choice = raw_choice if isinstance(raw_choice, int) else 0
         if not headline or not editorial:
             raise NewsletterCompositionError("The model returned an empty headline or editorial.")
-        feedback = validate_editorial(headline, editorial, names=names, link_checker=link_checker)
+        feedback = validate_editorial(
+            headline,
+            editorial,
+            names=names,
+            quotes=[text for _, _, text in quote_candidates(digest, scores)],
+            link_checker=link_checker,
+        )
         if not 0 <= choice <= candidate_count:
             feedback += (f"quote_choice must be between 0 and {candidate_count}",)
         if not feedback:
