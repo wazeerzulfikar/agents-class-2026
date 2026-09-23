@@ -41,7 +41,8 @@ SCORE_SCHEMA: dict[str, object] = {
             "type": "string",
             "description": (
                 "One plain sentence, at most 18 words, saying what the student built this "
-                "week, suitable for a public list. If nothing was built, say so plainly."
+                "week, written for the class list: no mention of evidence, assessment, or "
+                "what is missing. If only a site exists, say what the site is."
             ),
         },
         "went_well": {
