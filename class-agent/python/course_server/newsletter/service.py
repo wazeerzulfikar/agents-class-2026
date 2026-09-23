@@ -140,7 +140,12 @@ class NewsletterService:
             subject=self._settings.subject,
             body=copy,
             roster=tuple(
-                ProjectLink(project_id=item.project_id, label=item.label, site_url=item.site_url)
+                ProjectLink(
+                    project_id=item.project_id,
+                    label=item.label,
+                    site_url=item.site_url,
+                    posted=item.active,
+                )
                 for item in evidence
             ),
             quote=choose_quote(

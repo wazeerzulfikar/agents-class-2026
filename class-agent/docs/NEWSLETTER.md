@@ -15,8 +15,8 @@ Every issue follows the same skimmable shape:
 2. Four highlights (configurable). Each one shows an image from the student's own post, names
    the student, and gives a headline plus two sentences: what the build is and what makes it
    interesting, then specifically how it does what the assignment asked. A link opens the site.
-3. Every other student, with one sentence on what they built (or a note that nothing was posted
-   yet) and a link to their site.
+3. Every other student who posted work that week, with one sentence on what they built and a
+   link to their site. Students with nothing beyond the starter template are left off the list.
 4. A closing quote from an AI or computing pioneer.
 5. The course line (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`) and a link
    to the class website, `https://cognitive-agents.media.mit.edu`.

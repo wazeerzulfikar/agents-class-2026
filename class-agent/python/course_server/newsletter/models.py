@@ -201,6 +201,8 @@ class ProjectLink(NewsletterModel):
     project_id: ProjectId
     label: ShortText
     site_url: str | None = None
+    # Whether the student posted anything in the week's window; quiet students stay off the list.
+    posted: bool = True
 
 
 class HighlightImage(NewsletterModel):
@@ -260,8 +262,12 @@ class NewsletterIssue(NewsletterModel):
         return score.built or None if score is not None else None
 
     def other_projects(self) -> tuple[ProjectLink, ...]:
+        """Students who posted this week and were not featured."""
+
         highlighted = set(self.highlighted_project_ids())
-        return tuple(link for link in self.roster if link.project_id not in highlighted)
+        return tuple(
+            link for link in self.roster if link.posted and link.project_id not in highlighted
+        )
 
 
 def issue_id_for(week: CourseWeek) -> str:

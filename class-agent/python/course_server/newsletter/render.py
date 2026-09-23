@@ -93,7 +93,7 @@ def render_text(issue: NewsletterIssue) -> str:
     if others:
         lines.extend(f"- {_project_line(issue, link)}" for link in others)
     else:
-        lines.append("- Everyone made the highlights this week.")
+        lines.append("- Everyone who posted made the highlights this week.")
     lines.extend(
         [
             "",
@@ -183,7 +183,7 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
             for link in others
         )
         if others
-        else f'<p style="margin:0;{_LABEL}">Everyone made the highlights this week.</p>'
+        else f'<p style="margin:0;{_LABEL}">Everyone who posted made the highlights this week.</p>'
     )
     editorial = "".join(
         f'<p style="margin:0 0 16px 0;font-family:{_SANS};font-size:16px;line-height:1.55;'

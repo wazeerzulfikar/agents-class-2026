@@ -660,7 +660,8 @@ def sample_issue(*, status: str = "draft") -> NewsletterIssue:
             ProjectLink(
                 project_id="agents2026-grace", label="Grace", site_url="https://g.example/?x=1&y=2"
             ),
-            ProjectLink(project_id="agents2026-hal", label="Hal", site_url=None),
+            ProjectLink(project_id="agents2026-hal", label="Hal", site_url=None, posted=False),
+            ProjectLink(project_id="agents2026-ivy", label="Ivy", site_url=None),
         ),
         quote=PIONEER_QUOTES[0],
         images=(
@@ -711,8 +712,9 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "Open it: https://a.example/" in text
     assert (
         "ALL THE OTHER BUILDS THIS WEEK\n- Grace: Grace built a tiny tool-calling loop. "
-        "https://g.example/?x=1&y=2\n- Hal: Nothing posted for this week yet."
+        "https://g.example/?x=1&y=2\n- Ivy: Nothing posted for this week yet."
     ) in text
+    assert "Hal" not in text
     assert "Ada — https://a.example/" not in text.split("ALL THE OTHER BUILDS")[1]
     assert '"We can only see a short distance ahead' in text
     assert "— Alan Turing, Computing Machinery and Intelligence, 1950" in text
@@ -734,7 +736,7 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert 'src="cid:agents2026-ada"' in render_html(issue, image_src=cid_image_source)
     assert '<a href="https://a.example/"' in html
     assert 'href="https://g.example/?x=1&amp;y=2"' in html
-    assert ">Hal</span>" in html and "Hal</a>" not in html
+    assert ">Ivy</span>" in html and "Hal" not in html
     assert 'href="https://cognitive-agents.media.mit.edu"' in html
     assert "Alan Turing" in html and "<title>The Class Runtime from MAS.S60</title>" in html
     assert "background:#000000" in html and "#f5f5f2" in html
@@ -923,7 +925,13 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         "agents2026-ada",
         "agents2026-hal-9000",
     ]
-    assert [link.label for link in issue.other_projects()] == ["Grace", "Zed"]
+    assert [link.label for link in issue.other_projects()] == []
+    assert {link.label: link.posted for link in issue.roster} == {
+        "Ada": True,
+        "Grace": False,
+        "Hal 9000": True,
+        "Zed": False,
+    }
     assert issue.model_id == "test-model" and issue.quote == PIONEER_QUOTES[0]
     assert [(image.project_id, image.filename, image.kind) for image in issue.images] == [
         ("agents2026-ada", "agents2026-ada.jpg", "post_image")
