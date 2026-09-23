@@ -16,6 +16,7 @@ from .models import (
     CourseWeek,
     Delivery,
     Highlight,
+    HighlightImage,
     NewsletterBranding,
     NewsletterCopy,
     NewsletterIssue,
@@ -28,8 +29,15 @@ from .models import (
     issue_id_for,
 )
 from .quotes import PIONEER_QUOTES, choose_quote
-from .render import render_html, render_text
+from .render import cid_image_source, relative_image_source, render_html, render_text
 from .schedule import NewsletterScheduleError, load_schedule, parse_schedule, select_week
+from .screenshots import (
+    PlaywrightScreenshotter,
+    ScreenshotError,
+    SiteScreenshot,
+    SiteScreenshotter,
+    encode_jpeg,
+)
 from .service import NewsletterService, NewsletterStateError, normalize_recipients
 from .store import FileNewsletterStore, NewsletterStoreError
 
@@ -42,6 +50,7 @@ __all__ = [
     "EvidenceLimits",
     "FileNewsletterStore",
     "Highlight",
+    "HighlightImage",
     "NewsletterBranding",
     "NewsletterCompositionError",
     "NewsletterCopy",
@@ -54,20 +63,27 @@ __all__ = [
     "NewsletterWriter",
     "OpenAINewsletterWriter",
     "PioneerQuote",
+    "PlaywrightScreenshotter",
     "ProjectDocument",
     "ProjectEvidence",
     "ProjectLink",
+    "ScreenshotError",
+    "SiteScreenshot",
+    "SiteScreenshotter",
     "WeeklyDigest",
     "WeeklyEvidenceCollector",
     "build_system_prompt",
     "build_user_prompt",
     "choose_quote",
+    "cid_image_source",
     "compose_newsletter",
+    "encode_jpeg",
     "issue_id_for",
     "load_schedule",
     "normalize_recipients",
     "parse_schedule",
     "project_label",
+    "relative_image_source",
     "render_html",
     "render_text",
     "select_week",

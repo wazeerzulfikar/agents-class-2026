@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
@@ -170,6 +171,17 @@ class MicrosoftGraphMailAdapter:
                     {"emailAddress": {"address": str(recipient)}} for recipient in message.to
                 ],
                 "internetMessageHeaders": headers,
+                "attachments": [
+                    {
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "name": f"{image.content_id}.{image.media_type.split('/', 1)[1]}",
+                        "contentType": image.media_type,
+                        "contentBytes": base64.b64encode(image.data).decode("ascii"),
+                        "contentId": image.content_id,
+                        "isInline": True,
+                    }
+                    for image in message.inline_images
+                ],
             },
         )
         try:

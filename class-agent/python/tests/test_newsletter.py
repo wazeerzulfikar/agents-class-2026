@@ -9,6 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from PIL import Image
 from pydantic import JsonValue
 
 from course_server.config import ConfigurationError
@@ -19,6 +20,7 @@ from course_server.newsletter import (
     EvidenceLimits,
     FileNewsletterStore,
     Highlight,
+    HighlightImage,
     NewsletterBranding,
     NewsletterCompositionError,
     NewsletterCopy,
@@ -30,11 +32,15 @@ from course_server.newsletter import (
     NewsletterStoreError,
     ProjectEvidence,
     ProjectLink,
+    ScreenshotError,
+    SiteScreenshot,
     WeeklyDigest,
     WeeklyEvidenceCollector,
     build_user_prompt,
     choose_quote,
+    cid_image_source,
     compose_newsletter,
+    encode_jpeg,
     parse_schedule,
     project_label,
     render_html,
@@ -339,6 +345,22 @@ def test_compose_enforces_eligibility_and_reprompts_once_with_concrete_problems(
             ),
             branding=NewsletterBranding(),
         )
+    wordy = " ".join(["word"] * 40)
+    with pytest.raises(NewsletterCompositionError, match="40 words; the limit is 32"):
+        compose_newsletter(
+            digest,
+            ScriptedWriter(
+                [
+                    copy_json("agents2026-ada", "agents2026-grace").replace(
+                        "A from-scratch loop.", wordy
+                    ),
+                    copy_json("agents2026-ada", "agents2026-grace").replace(
+                        "A from-scratch loop.", wordy
+                    ),
+                ]
+            ),
+            branding=NewsletterBranding(),
+        )
     empty = WeeklyDigest(
         week=week, projects=(evidence("agents2026-idle", "Idle", active=False),), highlight_count=4
     )
@@ -374,6 +396,15 @@ def sample_issue(*, status: str = "draft") -> NewsletterIssue:
             ProjectLink(project_id="agents2026-hal", label="Hal", site_url=None),
         ),
         quote=PIONEER_QUOTES[0],
+        images=(
+            HighlightImage(
+                project_id="agents2026-ada",
+                filename="agents2026-ada.jpg",
+                media_type="image/jpeg",
+                width=1200,
+                height=750,
+            ),
+        ),
         model_id="test-model",
         status="sent" if status == "sent" else "draft",
         created_at=datetime(2026, 9, 22, 13, 0, tzinfo=UTC),
@@ -404,11 +435,16 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     html = render_html(issue)
     assert "<script>" not in html
     assert "Ada &lt;script&gt;alert(1)&lt;/script&gt; loops" in html
+    assert "<h1" in html and "Week one is in the loop." in html
+    assert 'src="2026-week01/agents2026-ada.jpg"' in html
+    assert 'src="cid:agents2026-ada"' in render_html(issue, image_src=cid_image_source)
     assert '<a href="https://a.example/"' in html
     assert 'href="https://g.example/?x=1&amp;y=2"' in html
-    assert '<li style="margin:0 0 6px 0;">Hal</li>' in html
+    assert ">Hal</span>" in html and "Hal</a>" not in html
     assert 'href="https://cognitive-agents.media.mit.edu"' in html
     assert "Alan Turing" in html and "<title>The Class Runtime from MAS.S60</title>" in html
+    assert "background:#000000" in html and "#f5f5f2" in html
+    assert "\u2019" not in html and "\u201c" not in html
 
 
 def test_store_round_trips_issues_and_derives_cooldown_and_used_quotes(tmp_path: Path) -> None:
@@ -460,6 +496,35 @@ def test_store_round_trips_issues_and_derives_cooldown_and_used_quotes(tmp_path:
     with pytest.raises(NewsletterStoreError):
         store.load("../etc/passwd")
 
+    saved = store.save_image("2026-week01", "agents2026-ada.jpg", b"\xff\xd8jpeg")
+    assert saved == tmp_path / "newsletter/issues/2026-week01/agents2026-ada.jpg"
+    assert store.load_image("2026-week01", "agents2026-ada.jpg") == b"\xff\xd8jpeg"
+    assert (
+        'src="2026-week01/agents2026-ada.jpg"'
+        in (tmp_path / "newsletter/issues/2026-week01.html").read_text()
+    )
+    with pytest.raises(NewsletterStoreError):
+        store.load_image("2026-week01", "missing.jpg")
+    with pytest.raises(NewsletterStoreError):
+        store.image_path("2026-week01", "../secret.jpg")
+    with pytest.raises(NewsletterStoreError):
+        store.image_path("2026-week01", ".hidden")
+
+
+def test_encode_jpeg_downscales_captures_to_email_width() -> None:
+    import io
+
+    buffer = io.BytesIO()
+    Image.new("RGBA", (2400, 1500), (10, 20, 30, 255)).save(buffer, format="PNG")
+
+    shot = encode_jpeg(buffer.getvalue(), max_width=1200, quality=80)
+
+    assert (shot.width, shot.height, shot.media_type) == (1200, 750, "image/jpeg")
+    assert shot.data.startswith(b"\xff\xd8")
+    small = io.BytesIO()
+    Image.new("RGB", (300, 200)).save(small, format="PNG")
+    assert encode_jpeg(small.getvalue(), max_width=1200, quality=80).width == 300
+
 
 def test_quotes_rotate_by_week_and_skip_quotes_already_sent() -> None:
     assert choose_quote(week_number=1, used_texts=()) == PIONEER_QUOTES[0]
@@ -504,6 +569,18 @@ class RecordingMailAdapter:
         return []
 
 
+@dataclass
+class FakeScreenshotter:
+    urls: list[str] = field(default_factory=list)
+    fail_for: set[str] = field(default_factory=set)
+
+    def __call__(self, url: str) -> SiteScreenshot:
+        self.urls.append(url)
+        if url in self.fail_for:
+            raise ScreenshotError("Screenshot failed (Timeout).")
+        return SiteScreenshot(data=b"\xff\xd8jpeg", media_type="image/jpeg", width=1200, height=750)
+
+
 def make_service(
     tmp_path: Path, writer: ScriptedWriter, *, cooldown: int = 2
 ) -> tuple[NewsletterService, FileNewsletterStore]:
@@ -520,6 +597,7 @@ def make_service(
             limits=EvidenceLimits(workers=1),
         ),
         writer=writer,
+        screenshotter=FakeScreenshotter(),
         model_id="test-model",
         clock=lambda: datetime(2026, 9, 22, 15, 0, tzinfo=UTC),
     )
@@ -536,6 +614,12 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
     assert issue.highlighted_project_ids() == ("agents2026-ada", "agents2026-hal-9000")
     assert [link.label for link in issue.other_projects()] == ["Grace", "Zed"]
     assert issue.model_id == "test-model" and issue.quote == PIONEER_QUOTES[0]
+    assert [(image.project_id, image.filename) for image in issue.images] == [
+        ("agents2026-ada", "agents2026-ada.jpg")
+    ]
+    assert (tmp_path / "newsletter/issues/2026-week01/agents2026-ada.jpg").read_bytes() == (
+        b"\xff\xd8jpeg"
+    )
     assert "Eligible project ids: agents2026-ada, agents2026-hal-9000" in writer.prompts[0]
     assert (tmp_path / "newsletter/issues/2026-week01.html").exists()
 
@@ -548,6 +632,10 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         assert adapter.sent[0].to == ("me@mit.edu",)
         assert adapter.sent[0].subject == "The Class Runtime from MAS.S60"
         assert adapter.sent[0].html is not None and "<!DOCTYPE html>" in adapter.sent[0].html
+        assert 'src="cid:agents2026-ada"' in adapter.sent[0].html
+        assert [(image.content_id, image.data) for image in adapter.sent[0].inline_images] == [
+            ("agents2026-ada", b"\xff\xd8jpeg")
+        ]
         assert "THE CLASS RUNTIME" in adapter.sent[0].text
 
         with pytest.raises(NewsletterStateError, match="At least one recipient"):
@@ -616,10 +704,14 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
             week2_catalog, repository_prefix="agents2026-", limits=EvidenceLimits(workers=1)
         ),
         writer=week2_writer,
+        screenshotter=FakeScreenshotter(
+            fail_for={"https://mitmedialab.github.io/agents2026-grace/"}
+        ),
         clock=lambda: datetime(2026, 9, 29, 15, 0, tzinfo=UTC),
     )
     week2 = service2.draft()
     assert week2.issue_id == "2026-week02"
+    assert week2.images == ()
     assert week2.highlighted_project_ids() == ("agents2026-grace",)
     assert (
         "Recently featured and therefore ineligible this week: agents2026-ada, agents2026-hal-9000"

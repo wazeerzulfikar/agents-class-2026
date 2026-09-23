@@ -19,7 +19,14 @@ Every issue follows the same skimmable shape:
    to the class website, `https://cognitive-agents.media.mit.edu`.
 
 The email subject is `The Class Runtime from MAS.S60`. Each message is sent as plain text with an
-HTML alternative so it reads well in ordinary mail clients.
+HTML alternative. The HTML follows the course site's look: black ground, ivory Helvetica display
+text, small letter-spaced monospace labels, muted secondary text, and fine rules. Each highlight
+opens with a screenshot of the student's deployed site, captured at draft time with headless
+Chromium (the same Playwright dependency the agent's browser uses; `BROWSER_EXECUTABLE_PATH` is
+honored when it exists, otherwise Playwright's bundled Chromium). Screenshots are downscaled to
+1200 pixels wide, encoded as JPEG, stored beside the issue, and embedded in the email as inline
+`cid:` images so they need no external hosting. A site that cannot be captured is skipped and
+noted in the draft log; the highlight is still written.
 
 ## Where each decision lives
 
@@ -91,7 +98,8 @@ the shell. If a stale `OPENAI_API_KEY` is exported, the model request fails with
 ## Storage
 
 `NEWSLETTER_DATA_PATH` (default `var/newsletter/`, ignored by Git) holds `issues/<year>-weekNN.json`
-plus `.txt` and `.html` renderings for review. The JSON record stores the week, the validated
+plus `.txt` and `.html` renderings for review, and `issues/<year>-weekNN/<project>.jpg` screenshots
+that the `.html` preview references relatively, so it opens correctly in a browser. The JSON record stores the week, the validated
 model copy, the project roster with links, the quote, status (`draft` or `sent`), and one delivery
 row per recipient with the provider message ID or the sanitized error class. Sent issues are the
 source of the fairness rule and of quote rotation, so keep this directory in staff backups.

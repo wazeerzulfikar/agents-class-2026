@@ -11,6 +11,7 @@ from .models import ISSUE_ID_PATTERN, NewsletterIssue
 from .render import render_html, render_text
 
 _ISSUE_ID = re.compile(ISSUE_ID_PATTERN)
+_IMAGE_FILENAME = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
 
 
 class NewsletterStoreError(RuntimeError):
@@ -42,6 +43,24 @@ class FileNewsletterStore:
         text_path.write_text(render_text(issue), encoding="utf-8")
         html_path.write_text(render_html(issue), encoding="utf-8")
         return json_path
+
+    def image_path(self, issue_id: str, filename: str) -> Path:
+        self.paths_for(issue_id)
+        if not _IMAGE_FILENAME.fullmatch(filename) or filename.startswith("."):
+            raise NewsletterStoreError(f"Invalid image filename: {filename!r}")
+        return self.issues_directory / issue_id / filename
+
+    def save_image(self, issue_id: str, filename: str, data: bytes) -> Path:
+        path = self.image_path(issue_id, filename)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def load_image(self, issue_id: str, filename: str) -> bytes:
+        path = self.image_path(issue_id, filename)
+        if not path.is_file() or path.is_symlink():
+            raise NewsletterStoreError(f"Image {filename} for {issue_id} is missing.")
+        return path.read_bytes()
 
     def load(self, issue_id: str) -> NewsletterIssue | None:
         json_path, _, _ = self.paths_for(issue_id)

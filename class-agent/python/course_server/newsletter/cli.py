@@ -23,6 +23,7 @@ from .compose import NewsletterCompositionError, OpenAINewsletterWriter
 from .models import NewsletterIssue, NewsletterSettings
 from .render import render_html, render_text
 from .schedule import NewsletterScheduleError, load_schedule
+from .screenshots import PlaywrightScreenshotter
 from .service import NewsletterService, NewsletterStateError
 from .store import FileNewsletterStore, NewsletterStoreError
 
@@ -101,11 +102,16 @@ def _drafting_service(values: Mapping[str, str], *, log: TextIO) -> NewsletterSe
         model_id=agent_settings.model_id,
         api_key=agent_settings.model_api_key,
     )
+    executable = agent_settings.browser_executable_path
+    screenshotter = PlaywrightScreenshotter(
+        executable_path=executable if executable is not None and executable.is_file() else None
+    )
     return NewsletterService(
         settings=settings,
         weeks=load_schedule(settings.schedule_path, timezone=settings.timezone),
         collector=collector,
         writer=writer,
+        screenshotter=screenshotter,
         store=store,
         model_id=agent_settings.model_id,
         log=lambda message: print(message, file=log),
@@ -229,7 +235,8 @@ def _run(
         if not arguments.quiet:
             print(render_text(issue), file=out)
         print(
-            "Review the draft above (or open the .html file). To send it:\n"
+            "Review the draft above; open the .html file in a browser to see the designed "
+            "version with screenshots. To send it:\n"
             f"  python -m {MODULE} send {issue.issue_id} --to you@example.edu\n"
             f"  python -m {MODULE} send {issue.issue_id} --to-active-students\n"
             f"To try a test copy first:  python -m {MODULE} send {issue.issue_id} "

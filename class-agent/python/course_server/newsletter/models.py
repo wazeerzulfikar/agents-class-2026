@@ -187,6 +187,20 @@ class ProjectLink(NewsletterModel):
     site_url: str | None = None
 
 
+class HighlightImage(NewsletterModel):
+    """A screenshot of a highlighted build, stored next to the issue and inlined in email."""
+
+    project_id: ProjectId
+    filename: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._-]{1,120}$")]
+    media_type: Literal["image/jpeg", "image/png"]
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+
+    @property
+    def content_id(self) -> str:
+        return self.project_id
+
+
 class Delivery(NewsletterModel):
     recipient: EmailStr
     provider_message_id: str | None = None
@@ -205,6 +219,7 @@ class NewsletterIssue(NewsletterModel):
     body: NewsletterCopy
     roster: tuple[ProjectLink, ...]
     quote: PioneerQuote
+    images: tuple[HighlightImage, ...] = ()
     model_id: str | None = None
     status: Literal["draft", "sent"] = "draft"
     created_at: AwareDatetime
@@ -216,6 +231,9 @@ class NewsletterIssue(NewsletterModel):
 
     def link_for(self, project_id: str) -> ProjectLink | None:
         return next((link for link in self.roster if link.project_id == project_id), None)
+
+    def image_for(self, project_id: str) -> HighlightImage | None:
+        return next((image for image in self.images if image.project_id == project_id), None)
 
     def other_projects(self) -> tuple[ProjectLink, ...]:
         highlighted = set(self.highlighted_project_ids())

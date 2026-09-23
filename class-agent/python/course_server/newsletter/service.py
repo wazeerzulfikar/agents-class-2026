@@ -8,24 +8,28 @@ from zoneinfo import ZoneInfo
 
 from pydantic import EmailStr, ValidationError
 
-from course_server.mail.models import MailAdapter, OutboundMail
+from course_server.mail.models import InlineImage, MailAdapter, OutboundMail
 
 from .collect import WeeklyEvidenceCollector
 from .compose import NewsletterWriter, compose_newsletter
 from .models import (
     CourseWeek,
     Delivery,
+    Highlight,
+    HighlightImage,
     NewsletterIssue,
     NewsletterModel,
     NewsletterSettings,
     PioneerQuote,
+    ProjectEvidence,
     ProjectLink,
     WeeklyDigest,
     issue_id_for,
 )
 from .quotes import PIONEER_QUOTES, choose_quote
-from .render import render_html, render_text
+from .render import cid_image_source, render_html, render_text
 from .schedule import select_week
+from .screenshots import ScreenshotError, SiteScreenshotter
 from .store import FileNewsletterStore
 
 
@@ -62,6 +66,7 @@ class NewsletterService:
         store: FileNewsletterStore,
         collector: WeeklyEvidenceCollector | None = None,
         writer: NewsletterWriter | None = None,
+        screenshotter: SiteScreenshotter | None = None,
         quotes: tuple[PioneerQuote, ...] = PIONEER_QUOTES,
         model_id: str | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -71,6 +76,7 @@ class NewsletterService:
         self._weeks = tuple(weeks)
         self._collector = collector
         self._writer = writer
+        self._screenshotter = screenshotter
         self._store = store
         self._quotes = quotes
         self._model_id = model_id
@@ -115,6 +121,7 @@ class NewsletterService:
             f"asking the model for {digest.target_highlight_count()} highlights."
         )
         copy = compose_newsletter(digest, self._writer, branding=self._settings.branding)
+        images = self._capture_images(issue_id, copy.highlights, evidence)
         issue = NewsletterIssue(
             issue_id=issue_id,
             week=week,
@@ -130,11 +137,46 @@ class NewsletterService:
                 used_texts=self._store.used_quote_texts(),
                 quotes=self._quotes,
             ),
+            images=images,
             model_id=self._model_id,
             created_at=self._clock(),
         )
         self._store.save(issue)
         return issue
+
+    def _capture_images(
+        self,
+        issue_id: str,
+        highlights: Sequence[Highlight],
+        evidence: Sequence[ProjectEvidence],
+    ) -> tuple[HighlightImage, ...]:
+        if self._screenshotter is None:
+            return ()
+        sites = {item.project_id: item.site_url for item in evidence}
+        images: list[HighlightImage] = []
+        for highlight in highlights:
+            site_url = sites.get(highlight.project_id)
+            if site_url is None:
+                continue
+            try:
+                shot = self._screenshotter(site_url)
+            except ScreenshotError as error:
+                self._log(f"  {highlight.project_id}: no screenshot ({error})")
+                continue
+            extension = "png" if shot.media_type == "image/png" else "jpg"
+            filename = f"{highlight.project_id}.{extension}"
+            self._store.save_image(issue_id, filename, shot.data)
+            self._log(f"  {highlight.project_id}: screenshot saved ({len(shot.data)} bytes)")
+            images.append(
+                HighlightImage(
+                    project_id=highlight.project_id,
+                    filename=filename,
+                    media_type=shot.media_type,
+                    width=shot.width,
+                    height=shot.height,
+                )
+            )
+        return tuple(images)
 
     def load(self, issue_id: str) -> NewsletterIssue:
         issue = self._store.load(issue_id)
@@ -159,13 +201,27 @@ class NewsletterService:
         if not addresses:
             raise NewsletterStateError("At least one recipient is required.")
         text = render_text(issue)
-        html = render_html(issue)
+        html = render_html(issue, image_src=cid_image_source)
+        inline_images = tuple(
+            InlineImage(
+                content_id=image.content_id,
+                media_type=image.media_type,
+                data=self._store.load_image(issue.issue_id, image.filename),
+            )
+            for image in issue.images
+        )
         deliveries: list[Delivery] = []
         for address in addresses:
             attempted_at = self._clock()
             try:
                 sent = await mail.send_message(
-                    OutboundMail(to=(address,), subject=issue.subject, text=text, html=html)
+                    OutboundMail(
+                        to=(address,),
+                        subject=issue.subject,
+                        text=text,
+                        html=html,
+                        inline_images=inline_images,
+                    )
                 )
             except Exception as error:  # record the class, keep sending
                 self._log(f"  {address}: failed ({type(error).__name__})")

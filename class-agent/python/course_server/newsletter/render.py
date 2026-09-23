@@ -1,17 +1,39 @@
 """Deterministic plain-text and HTML renderings of a newsletter issue.
 
-Every string that originated in the model or in repository metadata is escaped here.
-Only roster URLs resolved by platform code become links.
+The HTML follows the course site's visual language: a black ground, ivory display text,
+small letter-spaced monospace labels, muted secondary text, and fine rules. Every string
+that originated in the model or in repository metadata is escaped here, and only roster URLs
+resolved by platform code become links.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 from html import escape
 
-from .models import NewsletterIssue, ProjectLink
+from .models import HighlightImage, NewsletterIssue, ProjectLink
 
 _RULE = "-" * 60
+
+# Mirrors packages/ui/src/styles.css tokens; email clients need literal values.
+_GROUND = "#000000"
+_SURFACE = "#111111"
+_INK = "#f5f5f2"
+_INK_SOFT = "#c9c9c4"
+_MUTED = "#8b8b86"
+_BORDER = "#2a2a28"
+_SANS = "'Helvetica Neue',Helvetica,Arial,sans-serif"
+_MONO = "SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace"
+_LABEL = (
+    f"font-family:{_MONO};font-size:11px;letter-spacing:0.14em;text-transform:uppercase;"
+    f"color:{_MUTED};"
+)
+_UNDERLINED = (
+    f"color:{_INK};text-decoration:none;border-bottom:1px solid {_BORDER};padding-bottom:3px;"
+)
+
+ImageSource = Callable[[HighlightImage], str]
 
 
 def _window_label(issue: NewsletterIssue) -> str:
@@ -80,81 +102,121 @@ def render_text(issue: NewsletterIssue) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def _link_html(link: ProjectLink | None, fallback: str) -> str:
-    if link is None:
-        return escape(fallback)
-    if link.site_url is None:
-        return escape(link.label)
+def relative_image_source(issue: NewsletterIssue) -> ImageSource:
+    """Image paths for the on-disk preview that sits next to the issue's asset folder."""
+
+    return lambda image: f"{issue.issue_id}/{image.filename}"
+
+
+def cid_image_source(image: HighlightImage) -> str:
+    """Image references for an email whose images travel as inline attachments."""
+
+    return f"cid:{image.content_id}"
+
+
+def _anchor(url: str, inner: str, *, style: str) -> str:
+    return f'<a href="{escape(url, quote=True)}" style="{style}">{inner}</a>'
+
+
+def _highlight_html(issue: NewsletterIssue, index: int, *, image_src: ImageSource) -> str:
+    highlight = issue.body.highlights[index - 1]
+    link = issue.link_for(highlight.project_id)
+    label = escape(link.label if link else highlight.project_id)
+    site_url = link.site_url if link else None
+    image = issue.image_for(highlight.project_id)
+    figure = ""
+    if image is not None:
+        img = (
+            f'<img src="{escape(image_src(image), quote=True)}" width="600" alt="{label}" '
+            f'style="display:block;width:100%;max-width:600px;height:auto;border:1px solid '
+            f'{_BORDER};border-radius:12px;background:{_SURFACE};">'
+        )
+        framed = _anchor(site_url, img, style="text-decoration:none;") if site_url else img
+        figure = f'<div style="margin:0 0 18px 0;">{framed}</div>'
+    open_link = (
+        '<p style="margin:14px 0 0 0;">'
+        + _anchor(site_url, f"Open {label}&rsquo;s build &rarr;", style=f"{_LABEL}{_UNDERLINED}")
+        + "</p>"
+        if site_url
+        else ""
+    )
     return (
-        f'<a href="{escape(link.site_url, quote=True)}" style="color:#111111;">'
-        f"{escape(link.label)}</a>"
+        f'<div style="margin:0 0 44px 0;">{figure}'
+        f'<p style="margin:0 0 8px 0;{_LABEL}">{index:02d} &middot; {label}</p>'
+        f'<h2 style="margin:0 0 10px 0;font-family:{_SANS};font-size:24px;line-height:1.2;'
+        f'font-weight:500;color:{_INK};">{escape(highlight.headline)}</h2>'
+        f'<p style="margin:0 0 8px 0;font-family:{_SANS};font-size:16px;line-height:1.5;'
+        f'color:{_INK_SOFT};">{escape(highlight.summary)}</p>'
+        f'<p style="margin:0;font-family:{_SANS};font-size:14px;line-height:1.5;color:{_MUTED};">'
+        f'<span style="{_LABEL}">Brief</span>&nbsp; {escape(highlight.goal_link)}</p>'
+        f"{open_link}</div>"
     )
 
 
-def render_html(issue: NewsletterIssue) -> str:
+def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None) -> str:
     branding = issue.branding
-    highlights: list[str] = []
-    for highlight in issue.body.highlights:
-        link = issue.link_for(highlight.project_id)
-        open_link = (
-            f'<p style="margin:6px 0 0 0;"><a href="{escape(link.site_url, quote=True)}" '
-            f'style="color:#111111;">Open {escape(link.label)}\u2019s build &rarr;</a></p>'
-            if link and link.site_url
-            else ""
-        )
-        highlights.append(
-            '<li style="margin:0 0 22px 0;">'
-            f'<p style="margin:0;font-size:17px;font-weight:600;">{escape(highlight.headline)}'
-            f' <span style="font-weight:400;color:#666666;">&middot; '
-            f"{_link_html(link, highlight.project_id)}</span></p>"
-            f'<p style="margin:6px 0 0 0;">{escape(highlight.summary)}</p>'
-            f'<p style="margin:6px 0 0 0;color:#444444;"><em>Why it fits the brief:</em> '
-            f"{escape(highlight.goal_link)}</p>"
-            f"{open_link}</li>"
-        )
+    source = image_src or relative_image_source(issue)
+    highlights = "".join(
+        _highlight_html(issue, index, image_src=source)
+        for index in range(1, len(issue.body.highlights) + 1)
+    )
     others = issue.other_projects()
-    other_items = (
-        "".join(
-            f'<li style="margin:0 0 6px 0;">{_link_html(link, link.project_id)}</li>'
+    other_names = (
+        " &nbsp;&middot;&nbsp; ".join(
+            _anchor(
+                link.site_url,
+                escape(link.label),
+                style=f"{_LABEL}color:{_INK};text-decoration:none;",
+            )
+            if link.site_url
+            else f'<span style="{_LABEL}">{escape(link.label)}</span>'
             for link in others
         )
         if others
-        else '<li style="margin:0;">Everyone made the highlights this week.</li>'
+        else f'<span style="{_LABEL}">Everyone made the highlights this week.</span>'
     )
+    rule = f'<hr style="border:0;border-top:1px solid {_BORDER};margin:36px 0;">'
+    body_text = f"font-family:{_SANS};font-size:16px;line-height:1.5;color:{_INK_SOFT};"
     return (
         "<!DOCTYPE html>\n"
         '<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<meta name="color-scheme" content="dark">'
         f"<title>{escape(issue.subject)}</title></head>"
-        '<body style="margin:0;padding:24px 16px;background:#ffffff;color:#111111;'
-        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;"
-        'font-size:16px;line-height:1.5;">'
-        '<div style="max-width:640px;margin:0 auto;">'
-        '<p style="margin:0;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;'
-        f'color:#666666;">{escape(branding.newsletter_name)}</p>'
-        '<h1 style="margin:6px 0 4px 0;font-size:24px;font-weight:600;">'
-        f"{escape(_window_label(issue))}</h1>"
-        '<p style="margin:0 0 20px 0;color:#666666;font-size:14px;">'
-        f"{escape(_course_line(issue))}</p>"
-        '<hr style="border:0;border-top:1px solid #dddddd;margin:0 0 20px 0;">'
-        f'<p style="margin:0 0 20px 0;">{escape(issue.body.opening)}</p>'
-        '<h2 style="margin:0 0 4px 0;font-size:18px;font-weight:600;">'
-        "This week\u2019s highlights</h2>"
-        '<p style="margin:0 0 16px 0;color:#666666;font-size:14px;">'
-        f"The brief: {escape(issue.week.tutorial)}</p>"
-        f'<ol style="margin:0;padding:0 0 0 22px;">{"".join(highlights)}</ol>'
-        f'<p style="margin:8px 0 20px 0;">{escape(issue.body.closing)}</p>'
-        '<h2 style="margin:0 0 8px 0;font-size:18px;font-weight:600;">'
-        "All the other builds this week</h2>"
-        f'<ul style="margin:0 0 24px 0;padding:0 0 0 22px;">{other_items}</ul>'
-        '<hr style="border:0;border-top:1px solid #dddddd;margin:0 0 20px 0;">'
-        '<blockquote style="margin:0 0 20px 0;padding:0 0 0 14px;'
-        f'border-left:2px solid #111111;color:#333333;">{escape(issue.quote.text)}<br>'
-        f'<span style="color:#666666;font-size:14px;">&mdash; {escape(issue.quote.author)}, '
-        f"{escape(issue.quote.source)}</span></blockquote>"
-        '<p style="margin:0;color:#666666;font-size:13px;">'
-        f"{escape(_course_line(issue))}<br>"
-        f'<a href="{escape(branding.course_site_url, quote=True)}" style="color:#111111;">'
-        f"{escape(branding.course_site_url)}</a><br>Sent by {escape(branding.sender_name)}.</p>"
-        "</div></body></html>\n"
+        f'<body style="margin:0;padding:0;background:{_GROUND};color:{_INK};">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'bgcolor="{_GROUND}" style="background:{_GROUND};"><tr><td align="center" '
+        'style="padding:40px 16px;">'
+        '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" '
+        'style="max-width:600px;width:100%;"><tr><td style="text-align:left;">'
+        f'<p style="margin:0 0 28px 0;{_LABEL}">{escape(branding.newsletter_name)} '
+        f"&middot; Issue {issue.week.number:02d}</p>"
+        f'<h1 style="margin:0 0 20px 0;font-family:{_SANS};font-size:34px;line-height:1.15;'
+        f'font-weight:500;letter-spacing:-0.01em;color:{_INK};">{escape(issue.body.opening)}</h1>'
+        f'<p style="margin:0;{_LABEL}">{escape(_window_label(issue))}</p>'
+        f"{rule}"
+        f'<p style="margin:0 0 6px 0;{_LABEL}">This week&rsquo;s highlights</p>'
+        f'<p style="margin:0 0 32px 0;font-family:{_SANS};font-size:14px;line-height:1.5;'
+        f'color:{_MUTED};">The brief: {escape(issue.week.tutorial)}</p>'
+        f"{highlights}"
+        f'<p style="margin:0;{body_text}">{escape(issue.body.closing)}</p>'
+        f"{rule}"
+        f'<p style="margin:0 0 16px 0;{_LABEL}">All the other builds this week</p>'
+        f'<p style="margin:0;line-height:2.1;">{other_names}</p>'
+        f"{rule}"
+        f'<p style="margin:0 0 12px 0;font-family:{_SANS};font-size:21px;line-height:1.4;'
+        f'font-weight:300;color:{_INK};">&ldquo;{escape(issue.quote.text)}&rdquo;</p>'
+        f'<p style="margin:0;{_LABEL}">&mdash; {escape(issue.quote.author)}, '
+        f"{escape(issue.quote.source)}</p>"
+        f"{rule}"
+        f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(_course_line(issue))}</p>'
+        '<p style="margin:0 0 10px 0;">'
+        + _anchor(
+            branding.course_site_url,
+            escape(branding.course_site_url),
+            style=f"{_LABEL}{_UNDERLINED}",
+        )
+        + "</p>"
+        f'<p style="margin:0;{_LABEL}">Sent by {escape(branding.sender_name)}</p>'
+        "</td></tr></table></td></tr></table></body></html>\n"
     )

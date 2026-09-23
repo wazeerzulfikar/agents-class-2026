@@ -20,7 +20,7 @@ NEWSLETTER_COPY_SCHEMA: dict[str, object] = {
     "properties": {
         "opening": {
             "type": "string",
-            "description": "Two or three punchy sentences that open the issue.",
+            "description": "One headline-like sentence that opens the issue.",
         },
         "highlights": {
             "type": "array",
@@ -42,6 +42,18 @@ NEWSLETTER_COPY_SCHEMA: dict[str, object] = {
     "additionalProperties": False,
 }
 _LINK_LIKE = re.compile(r"https?://|www\.|@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", re.IGNORECASE)
+# Brevity is part of the format; the model is re-prompted with the exact overrun.
+WORD_LIMITS: dict[str, int] = {
+    "headline": 8,
+    "summary": 32,
+    "goal_link": 28,
+    "opening": 28,
+    "closing": 28,
+}
+
+
+def _word_count(value: str) -> int:
+    return len(value.split())
 
 
 class NewsletterCompositionError(RuntimeError):
@@ -102,11 +114,14 @@ def build_system_prompt(branding: NewsletterBranding) -> str:
         "- Feature exactly the requested number of highlights, each a different eligible project.\n"
         "- Prefer builds that are complete, documented, creative, and clearly meet the week's "
         "goal. Never feature a project marked ineligible.\n"
-        "- For each highlight write: a pun-friendly headline; a one- or two-sentence summary of "
-        "what the build is; and one sentence that states specifically how it relates to the "
-        "week's assignment goal.\n"
-        "- The opening is two or three sentences that set up the week; the closing is one or "
-        "two sentences that hand off to the full list of builds and the closing quote.\n"
+        "- Brevity is the format. Each highlight has: a pun-friendly headline of at most six "
+        "words; a summary of exactly one sentence (at most 28 words) saying what the build is; "
+        "and a goal_link of exactly one sentence (at most 24 words) stating specifically how it "
+        "relates to the week's assignment goal. A screenshot of the build is shown above the "
+        "text, so do not describe what the site looks like.\n"
+        "- The opening is one sentence (at most 24 words) that reads like a headline for the "
+        "week; the closing is one sentence (at most 24 words) handing off to the full list of "
+        "builds and the quote.\n"
         "- Write plain text only: no Markdown, no bullet characters, no URLs, no email "
         "addresses, no emoji. Links, the full project list, the quote, and the footer are "
         "added by the platform.\n"
@@ -204,11 +219,23 @@ def validate_copy(copy: NewsletterCopy, digest: WeeklyDigest) -> tuple[str, ...]
         elif highlight.project_id not in eligible:
             problems.append(f"{highlight.project_id} is not an eligible project id")
         for field_name in ("headline", "summary", "goal_link"):
-            if _LINK_LIKE.search(getattr(highlight, field_name)):
+            value = getattr(highlight, field_name)
+            if _LINK_LIKE.search(value):
                 problems.append(f"{highlight.project_id} {field_name} must not contain links")
+            if _word_count(value) > WORD_LIMITS[field_name]:
+                problems.append(
+                    f"{highlight.project_id} {field_name} has {_word_count(value)} words; "
+                    f"the limit is {WORD_LIMITS[field_name]}"
+                )
     for field_name in ("opening", "closing"):
-        if _LINK_LIKE.search(getattr(copy, field_name)):
+        value = getattr(copy, field_name)
+        if _LINK_LIKE.search(value):
             problems.append(f"{field_name} must not contain links or addresses")
+        if _word_count(value) > WORD_LIMITS[field_name]:
+            problems.append(
+                f"{field_name} has {_word_count(value)} words; "
+                f"the limit is {WORD_LIMITS[field_name]}"
+            )
     return tuple(problems)
 
 

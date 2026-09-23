@@ -25,8 +25,10 @@ safe default when no decision was requested. If the original question email was 
 mail worker replies to that staff thread with the online resolution, its decision, and its exact
 answer. A question resolved while it is still queued has no external email thread to update.
 
-`OutboundMail` carries a canonical plain-text body and an optional `html` alternative. Gmail sends
-both as `multipart/alternative`; Microsoft Graph sends the HTML body when present. Only platform
+`OutboundMail` carries a canonical plain-text body, an optional `html` alternative, and optional
+`inline_images` referenced from that HTML as `cid:<content_id>`. Gmail sends the text and HTML as
+`multipart/alternative` with images as `multipart/related` parts; Microsoft Graph sends the HTML
+body with inline file attachments. Only platform
 rendering code produces HTML, and it escapes every model- or repository-derived string. The
 instructor-run weekly newsletter is currently the only sender that uses it; see
 [NEWSLETTER.md](NEWSLETTER.md).
