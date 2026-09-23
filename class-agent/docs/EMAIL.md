@@ -72,6 +72,19 @@ mailbox or put OAuth credentials in Git.
    an active Class Agent account for that address with role `ta`, `instructor`, or `admin`. Other
    senders, including students, are recorded as rejected and cannot create an answer.
 
+When the refresh token expires or is revoked (the worker and the newsletter command then fail
+with `Google identity authentication failed`, and Google reports `invalid_grant`), mint a new one
+with the bundled loopback flow, signed in as the dedicated mailbox:
+
+```bash
+uv run python -m course_server.mail_authorize
+```
+
+It prints a consent URL, receives the code on `http://127.0.0.1:8766/`, and prints the new
+`MAIL_REFRESH_TOKEN` once. The OAuth client must allow that loopback redirect (a **Desktop app**
+client does; a **Web application** client needs the URI added under its authorized redirect URIs).
+Update `.env` or `.env.mail` and restart the mail worker.
+
 The adapter follows Google's documented [OAuth 2.0 offline-access
 flow](https://developers.google.com/identity/protocols/oauth2/web-server), sends RFC 2822 MIME via
 [`users.messages.send`](https://developers.google.com/workspace/gmail/api/guides/sending), and

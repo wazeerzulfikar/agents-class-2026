@@ -1140,3 +1140,55 @@ def test_graph_adapter_sends_inline_images_as_inline_attachments() -> None:
         assert base64.b64decode(attachment["contentBytes"]) == b"\xff\xd8jpeg"
 
     asyncio.run(scenario())
+
+
+def test_mail_authorize_builds_offline_consent_url_and_exchanges_the_code() -> None:
+    from course_server.mail_authorize import (
+        MailAuthorizationError,
+        build_consent_url,
+        exchange_code,
+    )
+
+    url = build_consent_url(
+        client_id="client-id", redirect_uri="http://127.0.0.1:8766/", state="abc"
+    )
+    query = parse_qs(url.split("?", 1)[1])
+    assert query["access_type"] == ["offline"] and query["prompt"] == ["consent"]
+    assert "gmail.send" in query["scope"][0] and "gmail.readonly" in query["scope"][0]
+    assert query["state"] == ["abc"] and query["redirect_uri"] == ["http://127.0.0.1:8766/"]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        form = parse_qs(request.content.decode())
+        assert form["grant_type"] == ["authorization_code"]
+        assert form["code"] == ["one-time-code"] and form["client_secret"] == ["secret"]
+        return httpx.Response(200, json={"access_token": "a", "refresh_token": "fresh-token"})
+
+    token = exchange_code(
+        code="one-time-code",
+        client_id="client-id",
+        client_secret="secret",
+        redirect_uri="http://127.0.0.1:8766/",
+        transport=httpx.MockTransport(respond),
+    )
+    assert token == "fresh-token"
+
+    with pytest.raises(MailAuthorizationError, match="invalid_grant"):
+        exchange_code(
+            code="bad",
+            client_id="client-id",
+            client_secret="secret",
+            redirect_uri="http://127.0.0.1:8766/",
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(400, json={"error": "invalid_grant"})
+            ),
+        )
+    with pytest.raises(MailAuthorizationError, match="no refresh token"):
+        exchange_code(
+            code="ok",
+            client_id="client-id",
+            client_secret="secret",
+            redirect_uri="http://127.0.0.1:8766/",
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json={"access_token": "a"})
+            ),
+        )
