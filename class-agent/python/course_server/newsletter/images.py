@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Literal, Protocol
 from urllib.parse import urldefrag, urljoin, urlsplit
 
+import httpx
+from bs4 import BeautifulSoup
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, ViewportSize, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -24,11 +26,12 @@ from .models import CourseWeek
 from .screenshots import ScreenshotError, SiteScreenshot, encode_jpeg
 
 ImageKind = Literal["post_image", "screenshot"]
+_MAX_STATIC_HTML_BYTES = 2 * 1024 * 1024
 _VISUAL_TAGS = frozenset({"img", "svg", "canvas", "video"})
 _ANCHORS_JS = (
     "() => Array.from(document.querySelectorAll('a[href]')).map(a => "
-    "({href: a.href, text: (a.innerText || a.getAttribute('aria-label') || '').trim()"
-    ".slice(0, 120)}))"
+    "({href: a.getAttribute('href') || '', text: (a.innerText || a.textContent || "
+    "a.getAttribute('aria-label') || '').trim().slice(0, 120)}))"
 )
 # Tags every visual element with its index so a chosen candidate can be captured later.
 _VISUALS_JS = (
@@ -156,6 +159,32 @@ def discover_week_targets(
     return found
 
 
+def static_anchors(site_url: str, *, timeout_seconds: float = 15.0) -> list[dict[str, object]]:
+    """Links present in the served HTML, for sites whose scripts replace the DOM on load."""
+
+    try:
+        with httpx.Client(
+            follow_redirects=True, max_redirects=5, timeout=timeout_seconds
+        ) as client:
+            response = client.get(site_url)
+            response.raise_for_status()
+            media_type = response.headers.get("content-type", "").partition(";")[0].strip()
+            if not media_type.casefold().startswith("text/html"):
+                return []
+            html = response.content[:_MAX_STATIC_HTML_BYTES].decode(
+                response.encoding or "utf-8", errors="replace"
+            )
+    except httpx.HTTPError:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    anchors: list[dict[str, object]] = []
+    for element in soup.select("a[href]"):
+        href = element.get("href")
+        if isinstance(href, str):
+            anchors.append({"href": href, "text": element.get_text(" ", strip=True)[:120]})
+    return anchors
+
+
 def filter_candidates(
     raw_visuals: Sequence[Mapping[str, object]],
     *,
@@ -275,17 +304,15 @@ class PlaywrightImageFinder:
                         device_scale_factor=self._device_scale_factor,
                     )
                     self._open(page, site_url)
-                    anchors = page.evaluate(_ANCHORS_JS)
-                    week_pages = discover_week_pages(
-                        anchors if isinstance(anchors, list) else [],
-                        site_url=site_url,
-                        week=week,
-                    )
-                    week_anchor = discover_week_anchor(
-                        anchors if isinstance(anchors, list) else [],
-                        site_url=site_url,
-                        week=week,
-                    )
+                    rendered = page.evaluate(_ANCHORS_JS)
+                    # Rendered links first, then the served HTML: single-page apps often
+                    # replace the DOM and drop the plain links the template shipped with.
+                    anchors = [
+                        *(rendered if isinstance(rendered, list) else []),
+                        *static_anchors(site_url),
+                    ]
+                    week_pages = discover_week_pages(anchors, site_url=site_url, week=week)
+                    week_anchor = discover_week_anchor(anchors, site_url=site_url, week=week)
                     # Root visuals are considered only when the site has no week post; a
                     # landing-page graphic must not outrank a capture of the actual post.
                     scan = week_pages or [week_anchor or site_url]

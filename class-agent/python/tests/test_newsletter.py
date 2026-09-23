@@ -39,10 +39,13 @@ from course_server.newsletter import (
     SiteScreenshot,
     WeeklyDigest,
     WeeklyEvidenceCollector,
+    build_editorial_user_prompt,
+    build_highlights_user_prompt,
     build_judge_prompt,
-    build_user_prompt,
     choose_quote,
     cid_image_source,
+    compose_editorial,
+    compose_highlights,
     compose_newsletter,
     discover_week_anchor,
     discover_week_pages,
@@ -57,6 +60,7 @@ from course_server.newsletter import (
     select_week,
 )
 from course_server.newsletter.cli import main as newsletter_main
+from course_server.newsletter.compose import EDITORIAL_MARKER, HIGHLIGHTS_MARKER
 from course_server.newsletter.score import SCORING_MARKER
 from course_server.student_projects import (
     RepositoryView,
@@ -287,19 +291,26 @@ def digest_for(week: CourseWeek, *, cooldown: frozenset[str] = frozenset()) -> W
 def copy_json(*project_ids: str, extra: str = "") -> str:
     return json.dumps(
         {
-            "opening": "Loops, loops everywhere." + extra,
             "highlights": [
                 {
                     "project_id": project_id,
                     "headline": f"{project_id} gets loopy",
                     "description": (
-                        "A from-scratch loop. It is the minimal loop the brief asked for."
+                        f"A from-scratch loop by {project_id}. It observes, acts, and stops, "
+                        f"as the assignment asked of {project_id}." + extra
                     ),
                 }
                 for project_id in project_ids
             ],
         }
     )
+
+
+EDITORIAL = " ".join(["Everyone looped."] * 90)
+
+
+def editorial_json(headline: str = "Loop, There It Is", editorial: str = EDITORIAL) -> str:
+    return json.dumps({"headline": headline, "editorial": editorial})
 
 
 def score_json(goal_fit: int, interest: int, execution: int, rationale: str = "ok") -> str:
@@ -309,17 +320,22 @@ def score_json(goal_fit: int, interest: int, execution: int, rationale: str = "o
             "execution": execution,
             "goal_fit": goal_fit,
             "rationale": rationale,
+            "built": "A tidy agent loop.",
+            "went_well": "Clear loop.",
+            "struggled": "Thin docs.",
         }
     )
 
 
 @dataclass
 class ScriptedWriter:
-    """Copy responses are consumed in order; scores are looked up by project id."""
+    """Highlight and editorial responses are consumed in order; scores by project id."""
 
     responses: list[str]
     scores: dict[str, str] = field(default_factory=dict)
+    editorials: list[str] = field(default_factory=lambda: [editorial_json()])
     prompts: list[str] = field(default_factory=list)
+    editorial_prompts: list[str] = field(default_factory=list)
     score_prompts: list[str] = field(default_factory=list)
     judge_prompts: list[str] = field(default_factory=list)
     judge_choice: int = 1
@@ -330,9 +346,13 @@ class ScriptedWriter:
             self.score_prompts.append(user_prompt)
             project_id = user_prompt.split("Project id: ", 1)[1].split("\n", 1)[0]
             return self.scores.get(project_id, score_json(6, 6, 6))
-        assert "Respond with JSON" in system_prompt
+        if system_prompt.startswith(EDITORIAL_MARKER):
+            self.editorial_prompts.append(user_prompt)
+            return self.editorials.pop(0)
+        assert system_prompt.startswith(HIGHLIGHTS_MARKER)
         self.prompts.append(user_prompt)
-        return self.responses.pop(0)
+        # The last scripted response is repeated so rule-breaking scripts exhaust every retry.
+        return self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
 
     def judge_images(self, *, prompt: str, images: Sequence[bytes]) -> int:
         self.judge_prompts.append(prompt)
@@ -343,6 +363,7 @@ def test_compose_writes_only_the_selected_projects_in_order_and_reprompts_once()
     week = weeks()[0]
     digest = digest_for(week, cooldown=frozenset({"agents2026-hal"}))
     selected = ("agents2026-ada", "agents2026-grace")
+    branding = NewsletterBranding()
     writer = ScriptedWriter(
         [
             copy_json("agents2026-grace", "agents2026-ada", "agents2026-ada"),
@@ -350,29 +371,29 @@ def test_compose_writes_only_the_selected_projects_in_order_and_reprompts_once()
         ]
     )
 
-    copy = compose_newsletter(digest, writer, selected=selected, branding=NewsletterBranding())
+    highlights = compose_highlights(digest, writer, selected=selected, branding=branding)
 
-    assert [item.project_id for item in copy.highlights] == list(selected)
+    assert [item.project_id for item in highlights] == list(selected)
     assert len(writer.prompts) == 2
     assert "Featured projects, in order: agents2026-ada, agents2026-grace" in writer.prompts[0]
     assert "FEATURED #1" in writer.prompts[0] and "agents2026-idle" not in writer.prompts[0]
-    assert "goal for the week: Build a minimal agent loop.\n" in writer.prompts[0]
+    assert "assignment: Build a minimal agent loop.\n" in writer.prompts[0]
     assert "rejected" in writer.prompts[1]
     assert "exactly these project ids in this order" in writer.prompts[1]
 
     with pytest.raises(NewsletterCompositionError, match="broke platform rules"):
-        compose_newsletter(
+        compose_highlights(
             digest,
             ScriptedWriter([copy_json("agents2026-idle"), copy_json("agents2026-idle")]),
             selected=selected,
-            branding=NewsletterBranding(),
+            branding=branding,
         )
     with pytest.raises(NewsletterCompositionError, match="invalid JSON"):
-        compose_newsletter(
-            digest, ScriptedWriter(["not json"]), selected=selected, branding=NewsletterBranding()
+        compose_highlights(
+            digest, ScriptedWriter(["not json"]), selected=selected, branding=branding
         )
     with pytest.raises(NewsletterCompositionError, match="must not contain links"):
-        compose_newsletter(
+        compose_highlights(
             digest,
             ScriptedWriter(
                 [
@@ -381,24 +402,102 @@ def test_compose_writes_only_the_selected_projects_in_order_and_reprompts_once()
                 ]
             ),
             selected=selected,
-            branding=NewsletterBranding(),
+            branding=branding,
         )
-    wordy = " ".join(["word"] * 60)
-    with pytest.raises(NewsletterCompositionError, match="69 words; the limit is 48"):
-        compose_newsletter(
+    with pytest.raises(NewsletterCompositionError, match='must not use the word "brief"'):
+        compose_highlights(
             digest,
             ScriptedWriter(
                 [
-                    copy_json(*selected).replace("A from-scratch loop.", wordy),
-                    copy_json(*selected).replace("A from-scratch loop.", wordy),
+                    copy_json(*selected, extra=" Fits the brief."),
+                    copy_json(*selected, extra=" The brief."),
                 ]
             ),
             selected=selected,
-            branding=NewsletterBranding(),
+            branding=branding,
+        )
+    wordy = " ".join(["word"] * 60)
+    with pytest.raises(NewsletterCompositionError, match=r"\d+ words; the limit is 48"):
+        compose_highlights(
+            digest,
+            ScriptedWriter(
+                [
+                    copy_json(*selected).replace("A from-scratch loop", wordy),
+                    copy_json(*selected).replace("A from-scratch loop", wordy),
+                ]
+            ),
+            selected=selected,
+            branding=branding,
         )
     with pytest.raises(NewsletterCompositionError, match="No project was selected"):
-        compose_newsletter(digest, ScriptedWriter([]), selected=(), branding=NewsletterBranding())
-    assert "Total projects this week: 4" in build_user_prompt(digest, selected=selected)
+        compose_highlights(digest, ScriptedWriter([]), selected=(), branding=branding)
+    same = copy_json(*selected).replace("of agents2026-grace", "of agents2026-ada")
+    repeated = ScriptedWriter([same, same])
+    with pytest.raises(NewsletterCompositionError, match="repeats a sentence from agents2026-ada"):
+        compose_highlights(digest, repeated, selected=selected, branding=branding)
+    assert "This week's assignment: Build a minimal agent loop." in build_highlights_user_prompt(
+        digest, selected=selected
+    )
+
+
+def test_compose_editorial_uses_every_students_notes_and_enforces_length() -> None:
+    week = weeks()[0]
+    digest = digest_for(week)
+    branding = NewsletterBranding()
+    scores = (
+        ProjectScore(
+            project_id="agents2026-ada",
+            interest=8,
+            execution=7,
+            goal_fit=9,
+            total=8.2,
+            built="Ada built a loop.",
+            went_well="Clean loop.",
+            struggled="Sparse tests.",
+        ),
+        ProjectScore(project_id="agents2026-grace", interest=5, execution=5, goal_fit=6, total=5.4),
+    )
+    writer = ScriptedWriter([], editorials=[editorial_json("Loop, There It Is")])
+
+    headline, editorial = compose_editorial(digest, scores, writer, branding=branding)
+
+    assert headline == "Loop, There It Is" and editorial == EDITORIAL
+    prompt = writer.editorial_prompts[0]
+    assert (
+        "4 students; 3 posted work this week; 1 have nothing beyond the starter template" in prompt
+    )
+    assert "- Ada (assessment 8.2/10): built: Ada built a loop. / went well: Clean loop." in prompt
+    assert "- Hal: submission could not be assessed." in prompt
+    assert "Nothing posted yet: Idle" in prompt
+    assert prompt == build_editorial_user_prompt(digest, scores)
+
+    short = ScriptedWriter(
+        [], editorials=[editorial_json(editorial="Too short."), editorial_json()]
+    )
+    assert compose_editorial(digest, scores, short, branding=branding)[1] == EDITORIAL
+    assert "editorial has 2 words; write between 160 and 230" in short.editorial_prompts[1]
+    with pytest.raises(NewsletterCompositionError, match="editorial broke platform rules"):
+        compose_editorial(
+            digest,
+            scores,
+            ScriptedWriter(
+                [],
+                editorials=[
+                    editorial_json(headline=" ".join(["pun"] * 13)),
+                    editorial_json(editorial=EDITORIAL + " Great rubric."),
+                ],
+            ),
+            branding=branding,
+        )
+
+    full = compose_newsletter(
+        digest,
+        scores,
+        ScriptedWriter([copy_json("agents2026-ada")]),
+        selected=("agents2026-ada",),
+        branding=branding,
+    )
+    assert full.headline == "Loop, There It Is" and len(full.highlights) == 1
 
 
 def test_scoring_ranks_by_weighted_total_with_goal_gate_and_cooldown() -> None:
@@ -544,7 +643,8 @@ def sample_issue(*, status: str = "draft") -> NewsletterIssue:
         branding=NewsletterBranding(),
         subject="The Class Runtime from MAS.S60",
         body=NewsletterCopy(
-            opening="Week one is in the loop.",
+            headline="Week one is in the loop.",
+            editorial="Everyone looped.\n\nSome looped twice.",
             highlights=(
                 Highlight(
                     project_id="agents2026-ada",
@@ -579,6 +679,14 @@ def sample_issue(*, status: str = "draft") -> NewsletterIssue:
             ProjectScore(
                 project_id="agents2026-ada", interest=8, execution=7, goal_fit=9, total=8.2
             ),
+            ProjectScore(
+                project_id="agents2026-grace",
+                interest=5,
+                execution=5,
+                goal_fit=6,
+                total=5.4,
+                built="Grace built a tiny tool-calling loop.",
+            ),
         ),
         model_id="test-model",
         status="sent" if status == "sent" else "draft",
@@ -598,12 +706,13 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026" in text
     assert "1. Ada <script>alert(1)</script> loops — Ada" in text
     assert "   A minimal agent loop built from scratch. It is the loop asked for." in text
+    assert "THE ASSIGNMENT: Build a minimal agent loop.\n\nEveryone looped." in text
     assert "brief" not in text.casefold() and "scroll" not in text.casefold()
     assert "Open it: https://a.example/" in text
     assert (
-        "ALL THE OTHER BUILDS THIS WEEK\n- Grace — https://g.example/?x=1&y=2\n- Hal (no site yet)"
-        in text
-    )
+        "ALL THE OTHER BUILDS THIS WEEK\n- Grace: Grace built a tiny tool-calling loop. "
+        "https://g.example/?x=1&y=2\n- Hal: Nothing posted for this week yet."
+    ) in text
     assert "Ada — https://a.example/" not in text.split("ALL THE OTHER BUILDS")[1]
     assert '"We can only see a short distance ahead' in text
     assert "— Alan Turing, Computing Machinery and Intelligence, 1950" in text
@@ -613,6 +722,10 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "<script>" not in html
     assert "Ada &lt;script&gt;alert(1)&lt;/script&gt; loops" in html
     assert "<h1" in html and "Week one is in the loop." in html
+    assert "How the week went</p>" in html
+    assert html.count("Everyone looped.</p>") == 1 and "Some looped twice.</p>" in html
+    assert "Grace built a tiny tool-calling loop." in html
+    assert "Nothing posted for this week yet." in html
     assert "The assignment</p>" in html and ">Build a minimal agent loop.</p>" in html
     assert "Week 1 · Sep 15 \u2013 Sep 21, 2026" in html
     assert "Brief" not in html and "Keep scrolling" not in html
@@ -822,6 +935,10 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         b"\xff\xd8jpeg"
     )
     assert "Featured projects, in order: agents2026-ada, agents2026-hal-9000" in writer.prompts[0]
+    assert issue.body.headline == "Loop, There It Is"
+    assert issue.built_for("agents2026-ada") == "A tidy agent loop."
+    assert issue.built_for("agents2026-grace") is None
+    assert "4 students; 2 posted work this week" in writer.editorial_prompts[0]
     assert (tmp_path / "newsletter/issues/2026-week01.html").exists()
 
     async def scenario() -> None:

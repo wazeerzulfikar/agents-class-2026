@@ -131,7 +131,7 @@ class NewsletterService:
         self._log("Selected: " + ", ".join(selected))
         images = self._find_images(issue_id, selected, evidence, week, scores)
         copy = compose_newsletter(
-            digest, self._writer, selected=selected, branding=self._settings.branding
+            digest, scores, self._writer, selected=selected, branding=self._settings.branding
         )
         issue = NewsletterIssue(
             issue_id=issue_id,

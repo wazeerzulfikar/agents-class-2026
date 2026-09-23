@@ -2,15 +2,23 @@
 
 from .collect import EvidenceLimits, WeeklyEvidenceCollector, project_label
 from .compose import (
-    NEWSLETTER_COPY_SCHEMA,
+    EDITORIAL_MARKER,
+    EDITORIAL_SCHEMA,
+    HIGHLIGHTS_MARKER,
+    HIGHLIGHTS_SCHEMA,
     NewsletterCompositionError,
     NewsletterWriter,
     OpenAINewsletterWriter,
-    build_system_prompt,
-    build_user_prompt,
+    build_editorial_system_prompt,
+    build_editorial_user_prompt,
+    build_highlights_system_prompt,
+    build_highlights_user_prompt,
+    compose_editorial,
+    compose_highlights,
     compose_newsletter,
     describe_project,
-    validate_copy,
+    validate_editorial,
+    validate_highlights,
 )
 from .images import (
     FoundImage,
@@ -59,8 +67,11 @@ from .service import NewsletterService, NewsletterStateError, normalize_recipien
 from .store import FileNewsletterStore, NewsletterStoreError
 
 __all__ = [
+    "EDITORIAL_MARKER",
+    "EDITORIAL_SCHEMA",
+    "HIGHLIGHTS_MARKER",
+    "HIGHLIGHTS_SCHEMA",
     "MIN_GOAL_FIT",
-    "NEWSLETTER_COPY_SCHEMA",
     "PIONEER_QUOTES",
     "SCORE_SCHEMA",
     "SCORE_WEIGHTS",
@@ -98,11 +109,15 @@ __all__ = [
     "SiteScreenshot",
     "WeeklyDigest",
     "WeeklyEvidenceCollector",
+    "build_editorial_system_prompt",
+    "build_editorial_user_prompt",
+    "build_highlights_system_prompt",
+    "build_highlights_user_prompt",
     "build_judge_prompt",
-    "build_system_prompt",
-    "build_user_prompt",
     "choose_quote",
     "cid_image_source",
+    "compose_editorial",
+    "compose_highlights",
     "compose_newsletter",
     "describe_project",
     "discover_week_anchor",
@@ -121,5 +136,6 @@ __all__ = [
     "score_projects",
     "select_highlights",
     "select_week",
-    "validate_copy",
+    "validate_editorial",
+    "validate_highlights",
 ]

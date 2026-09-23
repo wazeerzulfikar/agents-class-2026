@@ -169,7 +169,10 @@ class Highlight(NewsletterModel):
 class NewsletterCopy(NewsletterModel):
     """Model-authored prose; platform code owns selection, links, ordering, quote, and footer."""
 
-    opening: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=900)]
+    headline: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    editorial: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2_500)
+    ]
     highlights: tuple[Highlight, ...] = Field(max_length=8)
 
 
@@ -182,6 +185,9 @@ class ProjectScore(NewsletterModel):
     goal_fit: int = Field(ge=0, le=10)
     total: float = Field(ge=0, le=10)
     rationale: Annotated[str, StringConstraints(strip_whitespace=True, max_length=600)] = ""
+    built: Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)] = ""
+    went_well: Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)] = ""
+    struggled: Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)] = ""
     eligible: bool = True
 
 
@@ -248,6 +254,10 @@ class NewsletterIssue(NewsletterModel):
 
     def image_for(self, project_id: str) -> HighlightImage | None:
         return next((image for image in self.images if image.project_id == project_id), None)
+
+    def built_for(self, project_id: str) -> str | None:
+        score = next((item for item in self.scores if item.project_id == project_id), None)
+        return score.built or None if score is not None else None
 
     def other_projects(self) -> tuple[ProjectLink, ...]:
         highlighted = set(self.highlighted_project_ids())

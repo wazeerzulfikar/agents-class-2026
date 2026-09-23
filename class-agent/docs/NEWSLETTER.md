@@ -8,11 +8,15 @@ week, shows the draft to the instructor, and sends email only after an explicit 
 
 Every issue follows the same skimmable shape:
 
-1. A one-sentence opening written for the week, the week's dates, and the assignment goal.
+1. A punny headline about the week's assignment, the week's dates, the assignment itself, and a
+   roughly 200-word editorial on how the class did: what generally went well, what people
+   struggled with, and patterns worth noticing, synthesized from the staff notes on every
+   submission.
 2. Four highlights (configurable). Each one shows an image from the student's own post, names
    the student, and gives a headline plus two sentences: what the build is and what makes it
    interesting, then specifically how it does what the assignment asked. A link opens the site.
-3. Every other course project, listed with its deployed site link.
+3. Every other student, with one sentence on what they built (or a note that nothing was posted
+   yet) and a link to their site.
 4. A closing quote from an AI or computing pioneer.
 5. The course line (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`) and a link
    to the class website, `https://cognitive-agents.media.mit.edu`.
@@ -25,7 +29,10 @@ text, small letter-spaced monospace labels, muted secondary text, and fine rules
 
 Every active project is scored, one model call each, against a fixed rubric from its bounded
 evidence: `interest` (how interesting the idea and the result are), `execution` (complete,
-working, documented), and `goal_fit` (did the student properly do what the week asked). Platform
+working, documented), and `goal_fit` (did the student properly do what the week asked). The same
+call produces the staff notes reused everywhere else: one sentence on what the student built, what
+went well, and what they struggled with. The editorial and headline are written from those notes
+across the whole class, so the model reads every submission before it writes a word. Platform
 code computes the total (goal fit 40%, interest 40%, execution 20%), ranks every project that met
 the goal-fit floor ahead of every project that did not, excludes students featured in the last
 `NEWSLETTER_HIGHLIGHT_COOLDOWN_ISSUES` sent issues, breaks ties deterministically, and takes the
@@ -57,9 +64,9 @@ be inspected is skipped and noted in the draft log; the highlight is still writt
 | Which week is "last week", and its assignment goal | Platform code, parsed from `shared/course/schedule/schedule.md` |
 | Which repositories exist and what can be read | The existing read-only GitHub catalog (`mitmedialab/agents2026-*`) |
 | Which projects are eligible to be featured | Platform code: the project changed something during the week and was not featured in the last `NEWSLETTER_HIGHLIGHT_COOLDOWN_ISSUES` sent issues |
-| Rubric scores per project, the prose, the image choice among measured candidates | The configured model, from bounded evidence |
+| Rubric scores and notes per project, the editorial, the prose, the image choice among measured candidates | The configured model, from bounded evidence |
 | Weights, goal-fit floor, ranking, cooldown, final selection and order | Platform code (`score.py`) |
-| Highlight set/order, brevity limits, link-free prose | Validated in code; a violating response is re-prompted once with the concrete problems, then rejected |
+| Highlight set/order, editorial length, brevity limits, link-free prose, no staff vocabulary ("brief", "rubric", "score") | Validated in code; a violating response is re-prompted once with the concrete problems, then rejected |
 | Links, project list, quote, footer, HTML escaping, image fetching and re-encoding | Platform code; the model cannot add links, addresses, or image URLs |
 | Whether anything is emailed, and to whom | The instructor, at `send` time |
 
@@ -133,8 +140,9 @@ draft only if nobody received it; re-running `send` on a sent issue is refused.
 
 ## Cost and failure behavior
 
-Each draft makes one scoring request per active project, one image-choice request per featured
-build with candidates, and one copy request (two if the first response breaks a rule), plus a few
-hundred GitHub reads across the class and one headless browser session per featured build. Provider failures
+Each draft makes one scoring request per active project, one editorial request, one image-choice
+request per featured build with candidates, and one highlight-copy request (each text request is
+retried once if the response breaks a rule), plus a few
+hundred GitHub reads across the class and one headless browser session per featured build. The `draft` command prints the total requests and input/output tokens it used; a week-1 run with 27 active projects used about 32 requests, 71,000 input tokens, and 9,000 output tokens. Provider failures
 surface as sanitized errors without response bodies. No newsletter code runs inside the API
 process or the Course Agent runtime.

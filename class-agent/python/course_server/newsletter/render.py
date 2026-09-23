@@ -8,6 +8,7 @@ resolved by platform code become links.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import date, timedelta
 from html import escape
@@ -57,18 +58,23 @@ def _course_line(issue: NewsletterIssue) -> str:
     )
 
 
-def _project_line(link: ProjectLink) -> str:
-    return f"{link.label} — {link.site_url}" if link.site_url else f"{link.label} (no site yet)"
+def _project_line(issue: NewsletterIssue, link: ProjectLink) -> str:
+    built = issue.built_for(link.project_id) or "Nothing posted for this week yet."
+    site = f" {link.site_url}" if link.site_url else ""
+    return f"{link.label}: {built}{site}"
 
 
 def render_text(issue: NewsletterIssue) -> str:
     branding = issue.branding
     lines: list[str] = [
         f"{branding.newsletter_name.upper()} · ISSUE {issue.week.number:02d}",
-        issue.body.opening,
+        issue.body.headline,
         "",
         _window_label(issue),
         f"THE ASSIGNMENT: {issue.week.tutorial}",
+        "",
+        issue.body.editorial,
+        "",
         _RULE,
         "",
         "HIGHLIGHTS",
@@ -85,7 +91,7 @@ def render_text(issue: NewsletterIssue) -> str:
     lines.append("ALL THE OTHER BUILDS THIS WEEK")
     others = issue.other_projects()
     if others:
-        lines.extend(f"- {_project_line(link)}" for link in others)
+        lines.extend(f"- {_project_line(issue, link)}" for link in others)
     else:
         lines.append("- Everyone made the highlights this week.")
     lines.extend(
@@ -163,14 +169,27 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
     others = issue.other_projects()
     name_style = f"{_LABEL}color:{_INK};text-decoration:none;"
     other_names = (
-        " &nbsp;&middot;&nbsp; ".join(
-            _anchor(link.site_url, escape(link.label), style=name_style)
-            if link.site_url
-            else f'<span style="{_LABEL}">{escape(link.label)}</span>'
+        "".join(
+            '<p style="margin:0 0 12px 0;">'
+            + (
+                _anchor(link.site_url, escape(link.label), style=name_style)
+                if link.site_url
+                else f'<span style="{_LABEL}color:{_INK};">{escape(link.label)}</span>'
+            )
+            + f'<br><span style="font-family:{_SANS};font-size:14px;line-height:1.5;'
+            f'color:{_MUTED};">'
+            + escape(issue.built_for(link.project_id) or "Nothing posted for this week yet.")
+            + "</span></p>"
             for link in others
         )
         if others
-        else f'<span style="{_LABEL}">Everyone made the highlights this week.</span>'
+        else f'<p style="margin:0;{_LABEL}">Everyone made the highlights this week.</p>'
+    )
+    editorial = "".join(
+        f'<p style="margin:0 0 16px 0;font-family:{_SANS};font-size:16px;line-height:1.55;'
+        f'color:{_INK_SOFT};">{escape(paragraph.strip())}</p>'
+        for paragraph in re.split(r"\n\s*\n|\n", issue.body.editorial)
+        if paragraph.strip()
     )
     rule = f'<hr style="border:0;border-top:1px solid {_BORDER};margin:36px 0;">'
     return (
@@ -188,17 +207,19 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
         f'<p style="margin:0 0 28px 0;{_LABEL}">{escape(branding.newsletter_name)} '
         f"&middot; Issue {issue.week.number:02d}</p>"
         f'<h1 style="margin:0 0 24px 0;font-family:{_SANS};font-size:34px;line-height:1.15;'
-        f'font-weight:500;letter-spacing:-0.01em;color:{_INK};">{escape(issue.body.opening)}</h1>'
+        f'font-weight:500;letter-spacing:-0.01em;color:{_INK};">{escape(issue.body.headline)}</h1>'
         f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(_window_label(issue))}</p>'
         f'<p style="margin:0 0 6px 0;{_LABEL}">The assignment</p>'
-        f'<p style="margin:0;font-family:{_SANS};font-size:20px;line-height:1.4;'
+        f'<p style="margin:0 0 28px 0;font-family:{_SANS};font-size:20px;line-height:1.4;'
         f'font-weight:400;color:{_INK};">{escape(issue.week.tutorial)}</p>'
+        f'<p style="margin:0 0 12px 0;{_LABEL}">How the week went</p>'
+        f"{editorial}"
         f"{rule}"
         f'<p style="margin:0 0 24px 0;{_LABEL}">Highlights</p>'
         f"{highlights}"
         f"{rule}"
         f'<p style="margin:0 0 16px 0;{_LABEL}">All the other builds this week</p>'
-        f'<p style="margin:0;line-height:2.1;">{other_names}</p>'
+        f"{other_names}"
         f"{rule}"
         f'<p style="margin:0 0 12px 0;font-family:{_SANS};font-size:21px;line-height:1.4;'
         f'font-weight:300;color:{_INK};">&ldquo;{escape(issue.quote.text)}&rdquo;</p>'

@@ -37,8 +37,31 @@ SCORE_SCHEMA: dict[str, object] = {
             "type": "string",
             "description": "At most 40 words explaining the scores, for the instructor.",
         },
+        "built": {
+            "type": "string",
+            "description": (
+                "One plain sentence, at most 18 words, saying what the student built this "
+                "week, suitable for a public list. If nothing was built, say so plainly."
+            ),
+        },
+        "went_well": {
+            "type": "string",
+            "description": "At most 25 words: what went well in this submission.",
+        },
+        "struggled": {
+            "type": "string",
+            "description": "At most 25 words: what the student struggled with or left missing.",
+        },
     },
-    "required": ["interest", "execution", "goal_fit", "rationale"],
+    "required": [
+        "interest",
+        "execution",
+        "goal_fit",
+        "rationale",
+        "built",
+        "went_well",
+        "struggled",
+    ],
     "additionalProperties": False,
 }
 # Instructor-set weights: following the assignment and being interesting matter most.
@@ -65,8 +88,12 @@ def build_score_system_prompt(branding: NewsletterBranding) -> str:
         "- goal_fit: whether the student properly did what this week's assignment asked, not "
         "something adjacent. Missing the core of the assignment scores 3 or below.\n"
         "Be strict and consistent: 5 is an ordinary complete submission, 8 or more is "
-        "exceptional, and evidence-free claims do not count. Respond with JSON matching the "
-        "schema and nothing else."
+        "exceptional, and evidence-free claims do not count.\n"
+        "Also write, in plain language for the class: `built`, one sentence (at most 18 words) "
+        "saying what the student built, naming the project if it has a name; `went_well` and "
+        "`struggled`, each at most 25 words, describing what worked and where the student had "
+        "difficulty or left gaps, so an editor can summarize the week. Refer to the student by "
+        "the label. Respond with JSON matching the schema and nothing else."
     )
 
 
@@ -107,6 +134,9 @@ def parse_score(raw: str, *, project_id: str, eligible: bool) -> ProjectScore:
                 2,
             ),
             rationale=rationale,
+            built=str(payload.get("built", ""))[:300],
+            went_well=str(payload.get("went_well", ""))[:400],
+            struggled=str(payload.get("struggled", ""))[:400],
             eligible=eligible,
         )
     except (TypeError, ValueError, ValidationError) as error:

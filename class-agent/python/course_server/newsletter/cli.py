@@ -28,6 +28,8 @@ from .service import NewsletterService, NewsletterStateError
 from .store import FileNewsletterStore, NewsletterStoreError
 
 MODULE = "course_server.newsletter"
+# Writers created for this command, so token usage can be reported after a draft.
+_WRITERS: list[OpenAINewsletterWriter] = []
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -102,6 +104,7 @@ def _drafting_service(values: Mapping[str, str], *, log: TextIO) -> NewsletterSe
         model_id=agent_settings.model_id,
         api_key=agent_settings.model_api_key,
     )
+    _WRITERS.append(writer)
     executable = agent_settings.browser_executable_path
     image_finder = PlaywrightImageFinder(
         judge=writer.judge_images,
@@ -162,6 +165,8 @@ def _print_scores(issue: NewsletterIssue, *, out: TextIO) -> None:
             f"{score.execution:>4}  {score.project_id}{flag}",
             file=out,
         )
+        if score.built:
+            print(f"           built: {score.built}", file=out)
         if score.rationale:
             print(f"           {score.rationale}", file=out)
     print("", file=out)
@@ -254,6 +259,13 @@ def _run(
         )
         _print_issue(issue, store, out=out)
         _print_scores(issue, out=out)
+        for writer in _WRITERS:
+            usage = writer.usage
+            print(
+                f"Model usage ({writer.model_id}): {usage.requests} requests, "
+                f"{usage.input_tokens:,} input tokens, {usage.output_tokens:,} output tokens.\n",
+                file=out,
+            )
         if not arguments.quiet:
             print(render_text(issue), file=out)
         print(
