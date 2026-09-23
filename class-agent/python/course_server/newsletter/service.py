@@ -207,12 +207,17 @@ class NewsletterService:
             if project is None or project.site_url is None:
                 continue
             context = f"{project.label}: {rationale.get(project_id, '')}".strip(": ")
-            try:
-                found = self._image_finder.find(
-                    site_url=project.site_url, week=week, context=context
-                )
-            except ScreenshotError as error:
-                self._log(f"  {project_id}: no image ({error})")
+            found = None
+            for attempt in (1, 2):  # one retry: site inspection can time out transiently
+                try:
+                    found = self._image_finder.find(
+                        site_url=project.site_url, week=week, context=context
+                    )
+                    break
+                except ScreenshotError as error:
+                    self._log(f"  {project_id}: attempt {attempt} failed ({error})")
+            if found is None and attempt == 2:
+                self._log(f"  {project_id}: no image after two attempts")
                 continue
             if found is None:
                 self._log(f"  {project_id}: no image found")

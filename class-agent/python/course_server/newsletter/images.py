@@ -18,8 +18,8 @@ from urllib.parse import urldefrag, urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
+from playwright.sync_api import BrowserContext, Page, ViewportSize, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Page, ViewportSize, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .models import CourseWeek
@@ -37,8 +37,9 @@ _ANCHORS_JS = (
 _VISUALS_JS = (
     "() => Array.from(document.querySelectorAll('img, svg, canvas, video')).map((el, i) => {"
     "  el.setAttribute('data-nl-idx', String(i));"
-    "  if (el.tagName === 'VIDEO') { try { el.muted = true; el.preload = 'auto';"
-    "    if (el.readyState < 2) { el.load(); } el.currentTime = 1; } catch (e) {} }"
+    "  if (el.tagName === 'VIDEO') { try { el.muted = true; el.controls = false;"
+    "    el.preload = 'auto'; if (el.readyState < 2) { el.load(); } el.currentTime = 1; }"
+    "    catch (e) {} }"
     "  const r = el.getBoundingClientRect();"
     "  const style = window.getComputedStyle(el);"
     "  return {index: i, tag: el.tagName.toLowerCase(), width: Math.round(r.width),"
@@ -191,7 +192,7 @@ def filter_candidates(
     page_url: str,
     min_width: int = 280,
     min_height: int = 140,
-    limit: int = 6,
+    limit: int = 4,
 ) -> list[ImageCandidate]:
     """Keep visible, reasonably sized visual elements, biggest first, one per source."""
 
@@ -299,11 +300,11 @@ class PlaywrightImageFinder:
                     ),
                 )
                 try:
-                    page = browser.new_page(
+                    browser_context = browser.new_context(
                         viewport=self._viewport,
                         device_scale_factor=self._device_scale_factor,
                     )
-                    self._open(page, site_url)
+                    page = self._open(browser_context, site_url)
                     rendered = page.evaluate(_ANCHORS_JS)
                     # Rendered links first, then the served HTML: single-page apps often
                     # replace the DOM and drop the plain links the template shipped with.
@@ -318,28 +319,62 @@ class PlaywrightImageFinder:
                     scan = week_pages or [week_anchor or site_url]
                     for page_url in scan:
                         if page_url != site_url:
-                            self._open(page, page_url)
+                            opened = self._try_open(browser_context, page_url)
+                            if opened is None:
+                                continue
+                            page = opened
                         found = self._capture_best(page, page_url, week=week, context=context)
                         if found is not None:
                             return found
                     fallback_url = scan[0]
-                    self._open(page, fallback_url)
-                    png = page.screenshot(type="png", full_page=False)
+                    fallback = self._try_open(browser_context, fallback_url)
+                    if fallback is None:
+                        fallback_url, fallback = page.url, page
+                    png = fallback.screenshot(
+                        type="png",
+                        full_page=False,
+                        animations="disabled",
+                        timeout=self._timeout_ms,
+                    )
                 finally:
                     browser.close()
         except (PlaywrightError, PlaywrightTimeoutError) as error:
-            raise ScreenshotError(f"Site inspection failed ({type(error).__name__}).") from error
+            detail = str(error).splitlines()[0][:120] if str(error) else ""
+            raise ScreenshotError(
+                f"Site inspection failed ({type(error).__name__}: {detail})."
+            ) from error
         return FoundImage(
             shot=encode_jpeg(png, max_width=self._output_width, quality=self._jpeg_quality),
             kind="screenshot",
             page_url=fallback_url,
         )
 
-    def _open(self, page: Page, url: str) -> None:
-        page.goto(url, wait_until="load", timeout=self._timeout_ms)
+    def _try_open(self, browser_context: BrowserContext, url: str) -> Page | None:
+        """Open a URL in a fresh tab; a stalled load still counts once the document arrived."""
+
+        try:
+            return self._open(browser_context, url)
+        except PlaywrightTimeoutError:
+            page = browser_context.pages[-1] if browser_context.pages else None
+            arrived = page is not None and (
+                page.url.split("#", 1)[0].rstrip("/") == url.split("#", 1)[0].rstrip("/")
+            )
+            self._log(
+                f"    {url}: load timed out; {'using partial page' if arrived else 'skipped'}"
+            )
+            return page if arrived else None
+
+    def _open(self, browser_context: BrowserContext, url: str) -> Page:
+        """Each page gets its own tab so a student's root app cannot block later navigation."""
+
+        self._log(f"    opening {url}")
+        page = browser_context.new_page()
+        # domcontentloaded: a hanging third-party resource must not block the whole capture.
+        page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
         with contextlib.suppress(PlaywrightTimeoutError):
             page.wait_for_load_state("networkidle", timeout=5_000)
         page.wait_for_timeout(self._settle_ms)
+        return page
 
     def _capture_best(
         self, page: Page, page_url: str, *, week: CourseWeek, context: str
@@ -354,9 +389,13 @@ class PlaywrightImageFinder:
         )
         captures: list[tuple[ImageCandidate, bytes]] = []
         for candidate in candidates:
+            locator = page.locator(f'[data-nl-idx="{candidate.index}"]').first
+            if candidate.tag == "video" and not self._video_has_frame(page, candidate.index):
+                self._log(f"    video #{candidate.index}: no frame loaded; skipped")
+                continue
             try:
-                png = page.locator(f'[data-nl-idx="{candidate.index}"]').first.screenshot(
-                    type="png", timeout=self._timeout_ms
+                png = locator.screenshot(
+                    type="png", animations="disabled", timeout=self._timeout_ms
                 )
             except (PlaywrightError, PlaywrightTimeoutError) as error:
                 self._log(
@@ -383,6 +422,24 @@ class PlaywrightImageFinder:
             source_url=candidate.src or None,
         )
 
+    def _video_has_frame(self, page: Page, index: int) -> bool:
+        """Give a nudged video a few seconds to decode a frame; a spinner is not a picture."""
+
+        selector = f'[data-nl-idx="{index}"]'
+        with contextlib.suppress(PlaywrightError, PlaywrightTimeoutError):
+            page.wait_for_function(
+                "selector => { const v = document.querySelector(selector);"
+                " return !!v && v.readyState >= 2; }",
+                arg=selector,
+                timeout=6_000,
+            )
+        ready = page.evaluate(
+            "selector => { const v = document.querySelector(selector);"
+            " return v ? v.readyState : 0; }",
+            selector,
+        )
+        return isinstance(ready, int) and ready >= 2
+
     def _choose(
         self,
         captures: Sequence[tuple[ImageCandidate, bytes]],
@@ -390,7 +447,8 @@ class PlaywrightImageFinder:
         week: CourseWeek,
         context: str,
     ) -> tuple[ImageCandidate, bytes] | None:
-        if self._judge is None or len(captures) == 1:
+        # Even a single capture is judged, so a blank frame or logo can be rejected.
+        if self._judge is None:
             return captures[0]
         try:
             choice = self._judge(
