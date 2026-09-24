@@ -254,8 +254,13 @@ def build_editorial_system_prompt(branding: NewsletterBranding) -> str:
         "fun with it and be concrete: point at actual builds by what they are (a rolling-ball "
         "physics world, a Downloads-folder renamer, a town of pixel townspeople), the odd "
         "failure modes that showed up, and the lecture's own phrases, so it reads like a note "
-        "from someone who looked at everything. Never name a student. Never state how many "
-        "people submitted, posted, or struggled; no counts or proportions of the class at all. "
+        "from someone who looked at everything. Whenever you refer to a specific build, wrap "
+        "that phrase in a Markdown link to that submission's site URL from the notes, for "
+        "example [a rolling-ball physics world](https://...), so readers can jump to it. "
+        "Readability matters: short sentences of at most 20 words, one idea each, and never "
+        "more than three items in a comma-separated run. Never name a student. Never state how "
+        "many people submitted, posted, or struggled; no counts or proportions of the class at "
+        "all. "
         "Do not single out the featured projects as such; the highlights and the full list "
         "follow separately. Do not reuse wording from the candidate closing quotes; the chosen "
         "quote closes the issue on its own. When a specific reference genuinely helps (a paper, "
@@ -370,9 +375,10 @@ def build_editorial_user_prompt(
         score = scored.get(project.project_id)
         if score is None:
             continue
+        site = f" / site: {project.site_url}" if project.site_url else ""
         sections.append(
             f"- Submission {index}: built: {score.built or 'unclear'} / "
-            f"went well: {score.went_well or 'n/a'} / struggled: {score.struggled or 'n/a'}"
+            f"went well: {score.went_well or 'n/a'} / struggled: {score.struggled or 'n/a'}{site}"
         )
     candidates = quote_candidates(digest, scores)
     if candidates:
@@ -453,8 +459,11 @@ def validate_editorial(
     *,
     names: Sequence[str] = (),
     quotes: Sequence[str] = (),
+    project_urls: Sequence[str] = (),
     link_checker: LinkChecker | None = None,
 ) -> tuple[str, ...]:
+    """Project links (to roster sites) are unlimited; external references stay bounded."""
+
     problems = _text_problems(headline, field_name="headline")
     if _word_count(headline) > WORD_LIMITS["headline"]:
         problems.append(
@@ -480,9 +489,14 @@ def validate_editorial(
                 f'editorial must not reuse wording from a candidate quote (found "{reused}")'
             )
             break
-    if len(links) > MAX_EDITORIAL_LINKS:
-        problems.append(f"editorial has {len(links)} links; the limit is {MAX_EDITORIAL_LINKS}")
-    for _, url in links:
+    known = {url.rstrip("/") for url in project_urls}
+    external = [url for _, url in links if url.rstrip("/") not in known]
+    if len(external) > MAX_EDITORIAL_LINKS:
+        problems.append(
+            f"editorial has {len(external)} reference links; the limit is {MAX_EDITORIAL_LINKS} "
+            "(links to students' own sites do not count)"
+        )
+    for url in external:
         if link_checker is not None and not link_checker(url):
             problems.append(f"the link {url} does not resolve; remove it or use a real one")
     return tuple(problems)
@@ -562,6 +576,9 @@ def compose_editorial(
             editorial,
             names=names,
             quotes=[text for _, _, text in quote_candidates(digest, scores)],
+            project_urls=[
+                project.site_url for project in digest.projects if project.site_url is not None
+            ],
             link_checker=link_checker,
         )
         if not 0 <= choice <= candidate_count:

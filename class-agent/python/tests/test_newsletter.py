@@ -531,8 +531,22 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
         " [a](https://good.example/1) [b](https://good.example/2) [c](https://good.example/3)"
     )
     assert any(
-        "3 links" in item for item in validate_editorial("Fine", many, link_checker=link_checker)
+        "3 reference links" in item
+        for item in validate_editorial("Fine", many, link_checker=link_checker)
     )
+    # Links to students' own sites are neither counted nor fetched.
+    sites = ["https://a.example/", "https://g.example/"]
+    site_linked = EDITORIAL + (
+        " [a rolling-ball world](https://a.example/) and [a renamer](https://g.example)"
+        " and [a maze](https://a.example/) plus [one paper](https://good.example/paper)."
+    )
+    assert (
+        validate_editorial(
+            "Fine", site_linked, project_urls=sites, link_checker=lambda url: "good" in url
+        )
+        == ()
+    )
+    assert "site: https://example.edu/agents2026-ada/" in prompt
     assert any(
         "must not contain links" in item
         for item in validate_editorial("Fine", EDITORIAL + " See https://bare.example/")

@@ -202,7 +202,7 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
         else f'<p style="margin:0;{_LABEL}">Everyone who posted made the highlights this week.</p>'
     )
     editorial = "".join(
-        f'<p style="margin:0 0 16px 0;font-family:{_SANS};font-size:16px;line-height:1.55;'
+        f'<p style="margin:0 0 18px 0;font-family:{_SANS};font-size:17px;line-height:1.65;'
         f'color:{_INK_SOFT};">{_prose_html(paragraph.strip())}</p>'
         for paragraph in re.split(r"\n\s*\n|\n", issue.body.editorial)
         if paragraph.strip()
