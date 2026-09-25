@@ -859,11 +859,12 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert html.count("linear-gradient(#000000,#000000)") == 2
     assert '<a href="https://a.example/"' in html and "Ada, from their week 1 post</a>" in html
     assert "background-color:#000000" in html and "#f5f5f2" in html
-    # Section labels are an italic serif in sentence case; nothing is tracked-out monospace.
-    assert "font-style:italic;font-size:19px" in html and "monospace" not in html
-    assert "uppercase" not in html and "fonts.googleapis.com/css2?family=Newsreader" in html
-    # Secondary text stays legible in inboxes: the site's faint grey never reaches the email.
-    assert "#8b8b86" not in html and "#c9c9c4" not in html
+    # Section labels are sentence-case sans, never tracked-out monospace, italic, or webfonts.
+    assert 'font-weight:600;color:#f5f5f2;">How the week went</p>' in html
+    assert "monospace" not in html and "uppercase" not in html and "italic" not in html
+    assert "fonts.googleapis.com" not in html
+    # Secondary text is near-white: the site's faint grey never reaches the email.
+    assert "#8b8b86" not in html and "#c9c9c4" not in html and "#f0f0ec" in html
     assert "\u2019" not in html and "\u201c" not in html
 
 
