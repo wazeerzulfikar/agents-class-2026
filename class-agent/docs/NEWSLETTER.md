@@ -15,8 +15,11 @@ Every issue follows the same skimmable shape:
    two paragraphs: what went well and which lecture ideas the class absorbed, then the blind spots
    (lecture ideas the submissions missed or misapplied) and common blockers, framed as what to
    practice next. It never names a student, never counts who submitted, and never mentions the
-   featured projects; code rejects names, participation tallies, and overlong copy. It may add up
-   to two reference links in Markdown form; each URL is checked to resolve before it is accepted.
+   featured projects; code rejects names, participation tallies, overlong copy, and dense prose
+   (average sentence over 18 words, any sentence over 26, semicolons, or a Flesch reading ease
+   below 50), feeding the exact problem back to the model. Build references are linked to the
+   student's site. It may add up to two external reference links in Markdown form; each URL is
+   checked to resolve before it is accepted.
 2. Four highlights (configurable). Each one shows an image from the student's own post, names
    the student, and gives a headline plus two sentences: what the build is and what makes it
    interesting, then specifically how it does what the assignment asked. A link opens the site.

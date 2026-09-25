@@ -308,7 +308,13 @@ def copy_json(*project_ids: str, extra: str = "") -> str:
     )
 
 
-EDITORIAL = " ".join(["Everyone looped."] * 55)
+EDITORIAL = " ".join(["The loop ran and it worked well."] * 16)
+DENSE = (
+    "Notwithstanding the aforementioned considerations, the heterogeneous submissions "
+    "demonstrated extraordinarily sophisticated architectural instrumentation, particularly "
+    "regarding observational fidelity; consequently, evaluation methodologies necessitate "
+    "comprehensive reconsideration across every conceivable dimension of implementation. "
+) * 3
 
 
 def editorial_json(
@@ -508,6 +514,11 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
         "count participation" in item
         for item in validate_editorial("Fine", EDITORIAL + " 12 students struggled.")
     )
+    dense_problems = validate_editorial("Fine", DENSE)
+    assert any("sentences average" in item for item in dense_problems)
+    assert any("longest sentence" in item for item in dense_problems)
+    assert any("reading ease" in item for item in dense_problems)
+    assert any("no semicolons" in item for item in dense_problems)
     borrowed = EDITORIAL + " Do not become a horoscope in a trench coat."
     assert any(
         'reuse wording from a candidate quote (found "a horoscope in a trench")' in item
@@ -686,7 +697,7 @@ def sample_issue(*, status: str = "draft") -> NewsletterIssue:
         body=NewsletterCopy(
             headline="Week one is in the loop.",
             editorial=(
-                "Everyone looped.\n\nSome looped twice; see "
+                "The loop ran.\n\nSome looped twice; see "
                 "[the ReAct paper](https://arxiv.org/abs/2210.03629?x=1&y=2) for why."
             ),
             highlights=(
@@ -757,7 +768,7 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026" in text
     assert "1. Ada <script>alert(1)</script> loops — Ada" in text
     assert "   A minimal agent loop built from scratch. It is the loop asked for." in text
-    assert "THE ASSIGNMENT: Build a minimal agent loop.\n\nEveryone looped." in text
+    assert "THE ASSIGNMENT: Build a minimal agent loop.\n\nThe loop ran." in text
     assert "brief" not in text.casefold() and "scroll" not in text.casefold()
     assert "Open it: https://a.example/" in text
     assert (
@@ -776,7 +787,7 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "Ada &lt;script&gt;alert(1)&lt;/script&gt; loops" in html
     assert "<h1" in html and "Week one is in the loop." in html
     assert "How the week went</p>" in html
-    assert html.count("Everyone looped.</p>") == 1
+    assert html.count("The loop ran.</p>") == 1
     assert (
         '<a href="https://arxiv.org/abs/2210.03629?x=1&amp;y=2"' in html
         and ">the ReAct paper</a> for why.</p>" in html

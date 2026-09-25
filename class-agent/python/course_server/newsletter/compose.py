@@ -85,6 +85,10 @@ _PARTICIPATION_COUNT = re.compile(
     re.IGNORECASE,
 )
 MAX_EDITORIAL_LINKS = 2
+# Plain-language bounds for the editorial, enforced in code and fed back to the model.
+MAX_AVERAGE_SENTENCE_WORDS = 18
+MAX_SENTENCE_WORDS = 26
+MIN_READING_EASE = 50.0
 # Staff vocabulary that must not leak into student-facing copy. Kept narrow: words like
 # "score" are legitimate when describing a build that scores things.
 _BANNED_WORDS = re.compile(r"\b(brief|rubric)\b", re.IGNORECASE)
@@ -120,6 +124,7 @@ class EditorialDraft:
 
 
 _CHOICE = re.compile(r'"choice"\s*:\s*(\d+)')
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 
 class NewsletterCompositionError(RuntimeError):
@@ -257,8 +262,11 @@ def build_editorial_system_prompt(branding: NewsletterBranding) -> str:
         "from someone who looked at everything. Whenever you refer to a specific build, wrap "
         "that phrase in a Markdown link to that submission's site URL from the notes, for "
         "example [a rolling-ball physics world](https://...), so readers can jump to it. "
-        "Readability matters: short sentences of at most 20 words, one idea each, and never "
-        "more than three items in a comma-separated run. Never name a student. Never state how "
+        "Keep it simple: write for a tired student reading on a phone. Plain everyday words, "
+        "no jargon, no semicolons, at most one metaphor per paragraph, and no clever "
+        "compression. Short sentences of at most 20 words, one idea each, and never more than "
+        "three items in a comma-separated run. If a sentence needs a second read, split it. "
+        "Never name a student. Never state how "
         "many people submitted, posted, or struggled; no counts or proportions of the class at "
         "all. "
         "Do not single out the featured projects as such; the highlights and the full list "
@@ -453,6 +461,58 @@ def _reused_phrase(editorial: str, quote: str, *, window: int = 5) -> str | None
     return None
 
 
+_VOWEL_GROUPS = re.compile(r"[aeiouy]+")
+
+
+def _syllables(word: str) -> int:
+    stripped = re.sub(r"[^a-z]", "", word.casefold())
+    if not stripped:
+        return 0
+    count = len(_VOWEL_GROUPS.findall(stripped))
+    if stripped.endswith("e") and not stripped.endswith(("le", "ee")) and count > 1:
+        count -= 1
+    return max(1, count)
+
+
+def reading_ease(prose: str) -> float:
+    """Flesch reading ease from a heuristic syllable count; higher is easier."""
+
+    sentences = [part for part in _SENTENCE_SPLIT.split(prose) if part.strip()]
+    words = [word for word in re.sub(r"[^\w\s'-]", " ", prose).split() if word.strip("'-")]
+    if not sentences or not words:
+        return 100.0
+    syllables = sum(_syllables(word) for word in words)
+    return 206.835 - 1.015 * (len(words) / len(sentences)) - 84.6 * (syllables / len(words))
+
+
+def readability_problems(prose: str) -> list[str]:
+    sentences = [part.strip() for part in _SENTENCE_SPLIT.split(prose) if part.strip()]
+    if not sentences:
+        return []
+    lengths = [len(sentence.split()) for sentence in sentences]
+    problems: list[str] = []
+    average = sum(lengths) / len(lengths)
+    if average > MAX_AVERAGE_SENTENCE_WORDS:
+        problems.append(
+            f"sentences average {average:.0f} words; keep the average under "
+            f"{MAX_AVERAGE_SENTENCE_WORDS}"
+        )
+    longest = max(lengths)
+    if longest > MAX_SENTENCE_WORDS:
+        problems.append(
+            f"the longest sentence has {longest} words; split anything over {MAX_SENTENCE_WORDS}"
+        )
+    ease = reading_ease(prose)
+    if ease < MIN_READING_EASE:
+        problems.append(
+            f"reading ease is {ease:.0f} (needs at least {MIN_READING_EASE:.0f}); use shorter, "
+            "plainer words and simpler sentences"
+        )
+    if ";" in prose:
+        problems.append("no semicolons; use two sentences instead")
+    return problems
+
+
 def validate_editorial(
     headline: str,
     editorial: str,
@@ -482,6 +542,7 @@ def validate_editorial(
     tally = _PARTICIPATION_COUNT.search(prose)
     if tally is not None:
         problems.append(f'editorial must not count participation (found "{tally.group(0)}")')
+    problems += readability_problems(prose)
     for quote in quotes:
         reused = _reused_phrase(prose, quote)
         if reused is not None:
@@ -536,7 +597,7 @@ def validate_highlights(
 
 
 def _sentences(value: str) -> list[str]:
-    return [part.strip() for part in re.split(r"(?<=[.!?])\s+", value) if part.strip()]
+    return [part.strip() for part in _SENTENCE_SPLIT.split(value) if part.strip()]
 
 
 def compose_editorial(
