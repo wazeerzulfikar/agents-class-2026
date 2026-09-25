@@ -41,7 +41,7 @@ def _newsletter_outbox(settings: NewsletterSettings | None) -> NewsletterService
     return NewsletterService(
         settings=settings,
         weeks=weeks,
-        store=FileNewsletterStore(settings.data_path),
+        store=FileNewsletterStore(settings.data_path, logo_path=settings.logo_path),
         log=logger.info,
     )
 

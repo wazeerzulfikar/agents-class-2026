@@ -19,7 +19,7 @@ from course_server.postgres.auth_store import PostgresAuthStore, create_auth_poo
 from course_server.student_projects import GitHubStudentProjectCatalog
 from course_server.web_search import fetch_public_webpage
 
-from .collect import WeeklyEvidenceCollector
+from .collect import WeeklyEvidenceCollector, find_week_page
 from .compose import NewsletterCompositionError, OpenAINewsletterWriter
 from .images import PlaywrightImageFinder
 from .models import NewsletterIssue, NewsletterSettings
@@ -50,6 +50,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     draft.add_argument("--force", action="store_true", help="redraft a week already sent")
     draft.add_argument("--quiet", action="store_true", help="do not print the draft body")
+
+    rewrite = commands.add_parser(
+        "rewrite", help="rewrite a draft's copy while keeping its highlights and images"
+    )
+    rewrite.add_argument("issue_id")
+    rewrite.add_argument(
+        "--quiet", dest="quiet_rewrite", action="store_true", help="do not print the body"
+    )
 
     show = commands.add_parser("show", help="print a stored issue")
     show.add_argument("issue_id")
@@ -90,7 +98,7 @@ def _browser(values: Mapping[str, str]) -> Path | None:
 
 def _store(values: Mapping[str, str]) -> tuple[NewsletterSettings, FileNewsletterStore]:
     settings = NewsletterSettings.from_environment(values)
-    return settings, FileNewsletterStore(settings.data_path)
+    return settings, FileNewsletterStore(settings.data_path, logo_path=settings.logo_path)
 
 
 def _drafting_service(values: Mapping[str, str], *, log: TextIO) -> NewsletterService:
@@ -111,6 +119,7 @@ def _drafting_service(values: Mapping[str, str], *, log: TextIO) -> NewsletterSe
         catalog,
         repository_prefix=agent_settings.github_repository_prefix,
         read_site=fetch_public_webpage,
+        find_week_page=find_week_page,
         log=lambda message: print(message, file=log),
     )
     writer = OpenAINewsletterWriter(
@@ -299,6 +308,28 @@ def _run(
             f"To regenerate:  python -m {MODULE} draft --week {issue.week.number}",
             file=out,
         )
+        return 0
+    if arguments.command == "rewrite":
+        service = _drafting_service(values, log=err)
+        _, store = _store(values)
+        issue = service.rewrite_copy(arguments.issue_id)
+        _print_issue(issue, store, out=out)
+        try:
+            print(
+                f"PDF:   {export_pdf(store, issue.issue_id, executable_path=_browser(values))}",
+                file=out,
+            )
+        except NewsletterStoreError as error:
+            print(f"PDF export skipped: {error}", file=err)
+        for writer in _WRITERS:
+            usage = writer.usage
+            print(
+                f"Model usage ({writer.model_id}): {usage.requests} requests, "
+                f"{usage.input_tokens:,} input tokens, {usage.output_tokens:,} output tokens.\n",
+                file=out,
+            )
+        if not arguments.quiet_rewrite:
+            print(render_text(issue), file=out)
         return 0
     if arguments.command == "show":
         _, store = _store(values)

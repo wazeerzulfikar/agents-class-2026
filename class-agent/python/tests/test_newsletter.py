@@ -231,7 +231,19 @@ def fake_catalog() -> FakeCatalog:
 
 
 def read_site(url: str) -> str | dict[str, object]:
+    if url.endswith("week01.html"):
+        return {"url": url, "text": "Post: I built a loop that   renames files.", "images": []}
     return {"url": url, "text": f"Welcome to {url}\n\n\n\nWeek 1 write-up", "images": []}
+
+
+def find_week_page_for_tests(site_url: str, week: CourseWeek) -> str | None:
+    if "ada" in site_url:
+        return f"{site_url}week01.html"
+    if "grace" in site_url:
+        return f"{site_url}#week-01"
+    if "zed" in site_url:
+        raise RuntimeError("discovery exploded")
+    return None
 
 
 def test_collector_gathers_bounded_week_evidence_without_stopping_on_failures() -> None:
@@ -240,6 +252,7 @@ def test_collector_gathers_bounded_week_evidence_without_stopping_on_failures() 
         catalog,
         repository_prefix="agents2026-",
         read_site=read_site,
+        find_week_page=find_week_page_for_tests,
         limits=EvidenceLimits(max_document_chars=60, workers=1),
     )
 
@@ -260,6 +273,12 @@ def test_collector_gathers_bounded_week_evidence_without_stopping_on_failures() 
         ada.site_text
         == "Welcome to https://mitmedialab.github.io/agents2026-ada/\n\nWeek 1 write-up"
     )
+    assert ada.week_page_url == "https://mitmedialab.github.io/agents2026-ada/week01.html"
+    assert ada.week_page_text == "Post: I built a loop that renames files."
+    assert grace.week_page_url == "https://mitmedialab.github.io/agents2026-grace/#week-01"
+    assert grace.week_page_text is None  # a section of the root page, already in site_text
+    assert hal.week_page_url is None
+    assert any("discovery failed" in note for note in zed.notes)
     assert grace.active is False and grace.documents == () and grace.commit_count == 0
     assert hal.active and hal.site_url is None and hal.site_text is None
     assert zed.active is False
@@ -305,8 +324,9 @@ def copy_json(*project_ids: str, extra: str = "") -> str:
                     "project_id": project_id,
                     "headline": f"{project_id} gets loopy",
                     "description": (
-                        f"A from-scratch loop by {project_id}. It observes, acts, and stops, "
-                        f"as the assignment asked of {project_id}." + extra
+                        f"A tiny loop made by {project_id.rsplit('-', 1)[-1]}. It looks, then "
+                        f"acts, then stops when the job is done for "
+                        f"{project_id.rsplit('-', 1)[-1]}." + extra
                     ),
                 }
                 for project_id in project_ids
@@ -440,8 +460,8 @@ def test_compose_writes_only_the_selected_projects_in_order_and_reprompts_once()
             digest,
             ScriptedWriter(
                 [
-                    copy_json(*selected).replace("A from-scratch loop", wordy),
-                    copy_json(*selected).replace("A from-scratch loop", wordy),
+                    copy_json(*selected).replace("A tiny loop", wordy),
+                    copy_json(*selected).replace("A tiny loop", wordy),
                 ]
             ),
             selected=selected,
@@ -449,7 +469,16 @@ def test_compose_writes_only_the_selected_projects_in_order_and_reprompts_once()
         )
     with pytest.raises(NewsletterCompositionError, match="No project was selected"):
         compose_highlights(digest, ScriptedWriter([]), selected=(), branding=branding)
-    same = copy_json(*selected).replace("of agents2026-grace", "of agents2026-ada")
+    dense = copy_json(*selected).replace(
+        "A tiny loop made by",
+        "Notwithstanding heterogeneous architectural instrumentation, the STALLED_SHORT "
+        "outcome taxonomy substantiates a sophisticated observe_act loop by",
+    )
+    with pytest.raises(NewsletterCompositionError, match=r"reading ease|internal name"):
+        compose_highlights(
+            digest, ScriptedWriter([dense, dense]), selected=selected, branding=branding
+        )
+    same = copy_json(*selected).replace("for grace.", "for ada.")
     repeated = ScriptedWriter([same, same])
     with pytest.raises(NewsletterCompositionError, match="repeats a sentence from agents2026-ada"):
         compose_highlights(digest, repeated, selected=selected, branding=branding)
@@ -718,7 +747,12 @@ def sample_issue(*, status: str = "draft") -> NewsletterIssue:
             ),
         ),
         roster=(
-            ProjectLink(project_id="agents2026-ada", label="Ada", site_url="https://a.example/"),
+            ProjectLink(
+                project_id="agents2026-ada",
+                label="Ada",
+                site_url="https://a.example/",
+                post_url="https://a.example/week01.html",
+            ),
             ProjectLink(
                 project_id="agents2026-grace", label="Grace", site_url="https://g.example/?x=1&y=2"
             ),
@@ -782,7 +816,7 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
         "Curation and commentary by The Course Agent.\nReviewed by The MAS.S60 teaching team."
         in text
     )
-    assert "Open it: https://a.example/" in text
+    assert "Open it: https://a.example/week01.html" in text
     assert (
         "ALL THE OTHER BUILDS THIS WEEK\n- Grace: Grace built a tiny tool-calling loop. "
         "https://g.example/?x=1&y=2\n- Ivy: Nothing posted for this week yet."
@@ -816,7 +850,7 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert 'src="2026-week01/agents2026-ada.jpg"' in html
     assert 'alt="Ada &lt;script&gt;alert(1)&lt;/script&gt; loops"' in html
     assert 'src="cid:agents2026-ada"' in render_html(issue, image_src=cid_image_source)
-    assert '<a href="https://a.example/"' in html
+    assert '<a href="https://a.example/week01.html"' in html
     assert 'href="https://g.example/?x=1&amp;y=2"' in html
     assert ">Ivy</span>" in html and "Hal" not in html
     assert 'href="https://cognitive-agents.media.mit.edu"' in html
@@ -892,6 +926,52 @@ def test_store_round_trips_issues_and_derives_cooldown_and_used_quotes(tmp_path:
         store.image_path("2026-week01", "../secret.jpg")
     with pytest.raises(NewsletterStoreError):
         store.image_path("2026-week01", ".hidden")
+
+
+def test_store_places_an_email_sized_logo_and_the_email_inlines_it(tmp_path: Path) -> None:
+    logo_source = tmp_path / "wordmark.png"
+    Image.new("RGBA", (2000, 600), (255, 255, 255, 128)).save(logo_source, format="PNG")
+    store = FileNewsletterStore(tmp_path / "newsletter", logo_path=logo_source)
+    store.save_image("2026-week01", "agents2026-ada.jpg", b"\xff\xd8jpeg")
+
+    store.save(sample_issue())
+
+    placed = tmp_path / "newsletter/issues/2026-week01/newsletter-logo.png"
+    assert placed.is_file()
+    with Image.open(placed) as image:
+        assert image.size == (1000, 300) and image.mode == "RGBA"
+    html = (tmp_path / "newsletter/issues/2026-week01.html").read_text()
+    assert 'src="2026-week01/newsletter-logo.png"' in html and 'alt="The Class Runtime"' in html
+    assert "The Class Runtime &middot; Issue" not in html and ">Issue 01</p>" in html
+    store.clear_images("2026-week01")
+    assert placed.is_file()  # the logo survives image refreshes
+    assert store.logo_bytes("2026-week01") == placed.read_bytes()
+
+    async def scenario() -> None:
+        service = NewsletterService(settings=NewsletterSettings(), weeks=weeks(), store=store)
+        adapter = RecordingMailAdapter()
+        preview = await service.send(
+            "2026-week01", mail=adapter, recipients=["me@mit.edu"], test_only=True
+        )
+        assert preview.status == "draft"
+        logo = [
+            image
+            for image in adapter.sent[0].inline_images
+            if image.content_id == "newsletter-logo"
+        ]
+        assert len(logo) == 1 and logo[0].filename == "newsletter-logo.png"
+        assert (
+            adapter.sent[0].html is not None and 'src="cid:newsletter-logo"' in adapter.sent[0].html
+        )
+
+    asyncio.run(scenario())
+
+    plain_store = FileNewsletterStore(tmp_path / "plain")
+    plain_store.save(sample_issue())
+    plain_html = (tmp_path / "plain/issues/2026-week01.html").read_text()
+    assert (
+        "newsletter-logo" not in plain_html and "The Class Runtime &middot; Issue 01" in plain_html
+    )
 
 
 def test_encode_jpeg_downscales_captures_to_email_width() -> None:
@@ -1145,6 +1225,24 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
     assert week2.quote.kind == "student" and week2.quote.author == "Grace"
     assert week2.quote.text == "Tools! Tools are how an agent touches the world."
     assert week2.quote.url == "https://mitmedialab.github.io/agents2026-grace/"
+
+    # Rewriting keeps the stored selection, scores, and images; only the copy changes.
+    fresh = ScriptedWriter(
+        [copy_json("agents2026-ada", "agents2026-hal-9000")],
+        editorials=[editorial_json("Loop Again", quote_choice=0)],
+    )
+    rewriter, _ = make_service(tmp_path, fresh)
+    tools_store = FileNewsletterStore(tmp_path / "newsletter")
+    tools_store.save(issue.model_copy(update={"status": "draft", "approval": None}))
+    rewritten = rewriter.rewrite_copy("2026-week01")
+    assert rewritten.body.headline == "Loop Again"
+    assert rewritten.highlighted_project_ids() == ("agents2026-ada", "agents2026-hal-9000")
+    assert rewritten.scores == issue.scores and rewritten.images == issue.images
+    assert rewritten.created_at == datetime(2026, 9, 22, 15, 0, tzinfo=UTC)
+    assert fresh.score_prompts == []  # no re-scoring
+    tools_store.save(issue.model_copy(update={"status": "sent"}))
+    with pytest.raises(NewsletterStateError, match="only drafts"):
+        rewriter.rewrite_copy("2026-week01")
 
     forced = ScriptedWriter(
         [copy_json("agents2026-hal-9000", "agents2026-ada")],

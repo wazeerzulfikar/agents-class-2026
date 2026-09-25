@@ -41,10 +41,11 @@ SCORE_SCHEMA: dict[str, object] = {
         "built": {
             "type": "string",
             "description": (
-                "One plain sentence, at most 18 words, describing the build itself (its name "
-                "if it has one, what it does, what it is made of), written for the class list. "
-                "Do not include the student's name; no mention of evidence, assessment, or what "
-                "is missing. If only a site exists, say what the site is."
+                "One plain sentence, at most 18 words, telling a classmate who has never seen "
+                "the project what it does for a person (name it if it has a name). Everyday "
+                "words only: no acronyms, code names, or jargon. Do not include the student's "
+                "name; no mention of evidence, assessment, or what is missing. If only a site "
+                "exists, say what the site is."
             ),
         },
         "went_well": {

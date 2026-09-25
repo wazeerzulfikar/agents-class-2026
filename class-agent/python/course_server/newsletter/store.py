@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import re
 from pathlib import Path
 from uuid import UUID
 
+from PIL import Image
 from pydantic import ValidationError
 
 from .models import ISSUE_ID_PATTERN, NewsletterIssue, NewsletterJob
@@ -13,6 +15,9 @@ from .render import render_html, render_text
 
 _ISSUE_ID = re.compile(ISSUE_ID_PATTERN)
 _IMAGE_FILENAME = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
+LOGO_FILENAME = "newsletter-logo.png"
+LOGO_CONTENT_ID = "newsletter-logo"
+_LOGO_MAX_WIDTH = 1000
 
 
 class NewsletterStoreError(RuntimeError):
@@ -22,8 +27,9 @@ class NewsletterStoreError(RuntimeError):
 class FileNewsletterStore:
     """One `<issue_id>.json` per issue under `<root>/issues/`, ignored by Git."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, logo_path: Path | None = None) -> None:
         self._root = root
+        self._logo_path = logo_path
 
     @property
     def issues_directory(self) -> Path:
@@ -42,8 +48,38 @@ class FileNewsletterStore:
         temporary.write_text(issue.model_dump_json(indent=2) + "\n", encoding="utf-8")
         temporary.replace(json_path)
         text_path.write_text(render_text(issue), encoding="utf-8")
-        html_path.write_text(render_html(issue), encoding="utf-8")
+        logo = self._place_logo(issue.issue_id)
+        html_path.write_text(
+            render_html(issue, logo_src=f"{issue.issue_id}/{LOGO_FILENAME}" if logo else None),
+            encoding="utf-8",
+        )
         return json_path
+
+    def _place_logo(self, issue_id: str) -> Path | None:
+        """Write an email-sized copy of the wordmark beside the issue, if one is configured."""
+
+        if self._logo_path is None or not self._logo_path.is_file():
+            return None
+        target = self.image_path(issue_id, LOGO_FILENAME)
+        if target.is_file():
+            return target
+        try:
+            with Image.open(self._logo_path) as image:
+                rgba = image.convert("RGBA")
+                if rgba.width > _LOGO_MAX_WIDTH:
+                    height = max(1, round(rgba.height * _LOGO_MAX_WIDTH / rgba.width))
+                    rgba = rgba.resize((_LOGO_MAX_WIDTH, height), Image.Resampling.LANCZOS)
+                buffer = io.BytesIO()
+                rgba.save(buffer, format="PNG", optimize=True)
+        except (OSError, ValueError) as error:
+            raise NewsletterStoreError("The newsletter logo could not be read.") from error
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(buffer.getvalue())
+        return target
+
+    def logo_bytes(self, issue_id: str) -> bytes | None:
+        target = self._place_logo(issue_id)
+        return target.read_bytes() if target is not None else None
 
     def image_path(self, issue_id: str, filename: str) -> Path:
         self.paths_for(issue_id)
@@ -65,7 +101,12 @@ class FileNewsletterStore:
         if not directory.is_dir() or directory.is_symlink():
             return
         for path in directory.iterdir():
-            if path.is_file() and not path.is_symlink() and _IMAGE_FILENAME.fullmatch(path.name):
+            if (
+                path.is_file()
+                and not path.is_symlink()
+                and _IMAGE_FILENAME.fullmatch(path.name)
+                and path.name != LOGO_FILENAME
+            ):
                 path.unlink()
 
     def load_image(self, issue_id: str, filename: str) -> bytes:

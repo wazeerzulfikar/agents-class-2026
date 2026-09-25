@@ -103,7 +103,7 @@ def issue_summary(issue: NewsletterIssue, store: FileNewsletterStore) -> dict[st
                 "student": link.label if link else highlight.project_id,
                 "headline": highlight.headline,
                 "description": highlight.description,
-                "site_url": link.site_url if link else None,
+                "site_url": issue.open_url(highlight.project_id),
                 "has_image": issue.image_for(highlight.project_id) is not None,
             }
         )

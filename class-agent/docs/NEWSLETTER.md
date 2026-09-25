@@ -152,8 +152,10 @@ uv run python -m course_server.newsletter send 2026-week01 --to-active-students
 uv run python -m course_server.newsletter send 2026-week01 --to list@example.edu --yes
 ```
 
-If the draft is not right, edit nothing by hand; run `draft --week N` again to regenerate it. A week
-that was already sent is refused unless `--force` is passed, which produces a fresh draft.
+If the draft is not right, edit nothing by hand. `rewrite <issue>` regenerates the headline,
+editorial, highlight copy, and quote while keeping the selection, scores, and images (two model
+calls); `draft --week N` starts over, re-scoring the class. A week that was already sent is refused
+unless `--force` is passed, which produces a fresh draft.
 
 Drafting requires `GITHUB_STUDENT_PROJECTS_ENABLED=true`, a read-only `GITHUB_TOKEN`, and the
 model settings used by the agent. Sending requires the same `MAIL_*` settings as the mail worker;
@@ -162,6 +164,13 @@ model settings used by the agent. Sending requires the same `MAIL_*` settings as
 Like the other CLIs, the command loads `.env` without overriding variables already exported in
 the shell. If a stale `OPENAI_API_KEY` is exported, the model request fails with
 `AuthenticationError`; run `unset OPENAI_API_KEY` first so the `.env` value is used.
+
+## Masthead
+
+The wordmark at the top of every issue is `shared/course/newsletter/newsletter-logo.png`
+(`NEWSLETTER_LOGO_PATH` overrides it). The store writes an email-sized copy beside each issue, the
+HTML preview references it relatively, and the email embeds it as an inline `cid:` image like the
+highlight images.
 
 ## Storage
 

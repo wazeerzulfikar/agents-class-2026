@@ -18,6 +18,7 @@ DEFAULT_NEWSLETTER_DATA_PATH = PROJECT_ROOT / "var/newsletter"
 DEFAULT_SCHEDULE_PATH = PROJECT_ROOT / "shared/course/schedule/schedule.md"
 DEFAULT_SLIDES_PATH = PROJECT_ROOT / "shared/course/slides"
 DEFAULT_SYLLABUS_PATH = PROJECT_ROOT / "shared/course/syllabus/syllabus.md"
+DEFAULT_LOGO_PATH = PROJECT_ROOT / "shared/course/newsletter/newsletter-logo.png"
 ISSUE_ID_PATTERN = r"^[0-9]{4}-week[0-9]{2}$"
 
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
@@ -57,6 +58,8 @@ class NewsletterSettings(NewsletterModel):
     schedule_path: Path = DEFAULT_SCHEDULE_PATH
     slides_path: Path = DEFAULT_SLIDES_PATH
     syllabus_path: Path = DEFAULT_SYLLABUS_PATH
+    # The masthead wordmark; rendered at the top of the HTML and inlined in email.
+    logo_path: Path = DEFAULT_LOGO_PATH
 
     @classmethod
     def from_environment(cls, values: Mapping[str, str]) -> NewsletterSettings:
@@ -104,6 +107,7 @@ class NewsletterSettings(NewsletterModel):
             schedule_path=path("NEWSLETTER_SCHEDULE_PATH", DEFAULT_SCHEDULE_PATH),
             slides_path=path("NEWSLETTER_SLIDES_PATH", DEFAULT_SLIDES_PATH),
             syllabus_path=path("NEWSLETTER_SYLLABUS_PATH", DEFAULT_SYLLABUS_PATH),
+            logo_path=path("NEWSLETTER_LOGO_PATH", DEFAULT_LOGO_PATH),
         )
 
 
@@ -142,6 +146,9 @@ class ProjectEvidence(NewsletterModel):
     commits: tuple[CommitSummary, ...] = ()
     documents: tuple[ProjectDocument, ...] = ()
     site_text: str | None = None
+    # The student's post for this week on their site, when a link naming the week exists.
+    week_page_url: str | None = None
+    week_page_text: str | None = None
     notes: tuple[str, ...] = ()
 
     @property
@@ -219,6 +226,8 @@ class ProjectLink(NewsletterModel):
     project_id: ProjectId
     label: ShortText
     site_url: str | None = None
+    # The week's post when the site has one; links prefer it over the site root.
+    post_url: str | None = None
     # Whether the student posted anything in the week's window; quiet students stay off the list.
     posted: bool = True
 
@@ -307,6 +316,10 @@ class NewsletterIssue(NewsletterModel):
 
     def image_for(self, project_id: str) -> HighlightImage | None:
         return next((image for image in self.images if image.project_id == project_id), None)
+
+    def open_url(self, project_id: str) -> str | None:
+        link = self.link_for(project_id)
+        return (link.post_url or link.site_url) if link is not None else None
 
     def built_for(self, project_id: str) -> str | None:
         score = next((item for item in self.scores if item.project_id == project_id), None)

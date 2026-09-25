@@ -62,7 +62,7 @@ def _course_line(issue: NewsletterIssue) -> str:
 
 def _project_line(issue: NewsletterIssue, link: ProjectLink) -> str:
     built = issue.built_for(link.project_id) or "Nothing posted for this week yet."
-    site = f" {link.site_url}" if link.site_url else ""
+    site = f" {link.post_url or link.site_url}" if (link.post_url or link.site_url) else ""
     return f"{link.label}: {built}{site}"
 
 
@@ -89,8 +89,8 @@ def render_text(issue: NewsletterIssue) -> str:
         label = link.label if link else highlight.project_id
         lines.append(f"{index}. {highlight.headline} — {label}")
         lines.append(f"   {highlight.description}")
-        if link and link.site_url:
-            lines.append(f"   Open it: {link.site_url}")
+        if link and (link.post_url or link.site_url):
+            lines.append(f"   Open it: {link.post_url or link.site_url}")
         lines.append("")
     lines.append("ALL THE OTHER BUILDS THIS WEEK")
     others = issue.other_projects()
@@ -148,7 +148,7 @@ def _highlight_html(issue: NewsletterIssue, index: int, *, image_src: ImageSourc
     highlight = issue.body.highlights[index - 1]
     link = issue.link_for(highlight.project_id)
     label = escape(link.label if link else highlight.project_id)
-    site_url = link.site_url if link else None
+    site_url = (link.post_url or link.site_url) if link else None
     image = issue.image_for(highlight.project_id)
     figure = ""
     if image is not None:
@@ -178,7 +178,12 @@ def _highlight_html(issue: NewsletterIssue, index: int, *, image_src: ImageSourc
     )
 
 
-def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None) -> str:
+def render_html(
+    issue: NewsletterIssue,
+    *,
+    image_src: ImageSource | None = None,
+    logo_src: str | None = None,
+) -> str:
     branding = issue.branding
     source = image_src or relative_image_source(issue)
     highlights = "".join(
@@ -191,8 +196,8 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
         "".join(
             '<p style="margin:0 0 12px 0;">'
             + (
-                _anchor(link.site_url, escape(link.label), style=name_style)
-                if link.site_url
+                _anchor(link.post_url or link.site_url or "", escape(link.label), style=name_style)
+                if (link.post_url or link.site_url)
                 else f'<span style="{_LABEL}color:{_INK};">{escape(link.label)}</span>'
             )
             + f'<br><span style="font-family:{_SANS};font-size:14px;line-height:1.5;'
@@ -235,9 +240,16 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
         f'bgcolor="{_GROUND}" style="max-width:600px;width:100%;background-color:{_GROUND};">'
         f'<tr><td bgcolor="{_GROUND}" style="text-align:left;background-color:{_GROUND};'
         f'color:{_INK};">'
-        f'<p style="margin:0 0 28px 0;{_LABEL}">{escape(branding.newsletter_name)} '
-        f"&middot; Issue {issue.week.number:02d}</p>"
-        f'<h1 style="margin:0 0 24px 0;font-family:{_SANS};font-size:34px;line-height:1.15;'
+        + (
+            f'<img src="{escape(logo_src, quote=True)}" width="600" '
+            f'alt="{escape(branding.newsletter_name)}" style="display:block;width:100%;'
+            'max-width:600px;height:auto;margin:0 0 22px 0;">'
+            f'<p style="margin:0 0 28px 0;{_LABEL}">Issue {issue.week.number:02d}</p>'
+            if logo_src
+            else f'<p style="margin:0 0 28px 0;{_LABEL}">{escape(branding.newsletter_name)} '
+            f"&middot; Issue {issue.week.number:02d}</p>"
+        )
+        + f'<h1 style="margin:0 0 24px 0;font-family:{_SANS};font-size:34px;line-height:1.15;'
         f'font-weight:500;letter-spacing:-0.01em;color:{_INK};">{escape(issue.body.headline)}</h1>'
         f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(_window_label(issue))}</p>'
         f'<p style="margin:0 0 6px 0;{_LABEL}">The assignment</p>'

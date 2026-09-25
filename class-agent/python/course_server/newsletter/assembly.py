@@ -10,7 +10,7 @@ from course_server.config import AgentSettings, ConfigurationError
 from course_server.student_projects import GitHubStudentProjectCatalog
 from course_server.web_search import fetch_public_webpage
 
-from .collect import WeeklyEvidenceCollector
+from .collect import WeeklyEvidenceCollector, find_week_page
 from .compose import OpenAINewsletterWriter
 from .images import PlaywrightImageFinder
 from .jobs import NewsletterJobRunner
@@ -68,6 +68,7 @@ def drafting_service_factory(
                 catalog,
                 repository_prefix=agent_settings.github_repository_prefix,
                 read_site=fetch_public_webpage,
+                find_week_page=find_week_page,
                 log=log,
             ),
             writer=writer,
@@ -89,7 +90,7 @@ def build_newsletter_tools(
 ) -> NewsletterTools:
     """Everything the Course Agent's newsletter tools need, built once per process."""
 
-    store = FileNewsletterStore(settings.data_path)
+    store = FileNewsletterStore(settings.data_path, logo_path=settings.logo_path)
     weeks = newsletter_weeks(settings)
     factory = drafting_service_factory(agent_settings, settings, store=store, weeks=weeks)
     executable = browser_executable(agent_settings)

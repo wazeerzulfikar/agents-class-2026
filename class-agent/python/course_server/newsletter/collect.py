@@ -16,6 +16,7 @@ from course_server.student_projects import (
     StudentProjectProviderError,
 )
 
+from .images import discover_week_anchor, discover_week_pages, static_anchors
 from .models import CommitSummary, CourseWeek, ProjectDocument, ProjectEvidence
 
 WEEKLY_BUILDS_DIRECTORY = "weekly_builds"
@@ -32,6 +33,22 @@ class SiteReader(Protocol):
     def __call__(self, url: str) -> str | dict[str, object]: ...
 
 
+class WeekPageFinder(Protocol):
+    """Finds the student's post for the week from their site root, or None."""
+
+    def __call__(self, site_url: str, week: CourseWeek) -> str | None: ...
+
+
+def find_week_page(site_url: str, week: CourseWeek) -> str | None:
+    """The first same-site link naming the week in the served HTML, else a week section."""
+
+    anchors = static_anchors(site_url)
+    pages = discover_week_pages(anchors, site_url=site_url, week=week)
+    if pages:
+        return pages[0]
+    return discover_week_anchor(anchors, site_url=site_url, week=week)
+
+
 @dataclass(frozen=True)
 class EvidenceLimits:
     """Bounds that keep the model input and GitHub usage predictable."""
@@ -40,6 +57,7 @@ class EvidenceLimits:
     max_document_chars: int = 4_000
     max_project_document_chars: int = 9_000
     max_site_chars: int = 2_500
+    max_week_page_chars: int = 5_000
     max_commits: int = 15
     workers: int = 4
 
@@ -94,12 +112,14 @@ class WeeklyEvidenceCollector:
         *,
         repository_prefix: str,
         read_site: SiteReader | None = None,
+        find_week_page: WeekPageFinder | None = None,
         limits: EvidenceLimits | None = None,
         log: Callable[[str], None] | None = None,
     ) -> None:
         self._catalog = catalog
         self._repository_prefix = repository_prefix
         self._read_site = read_site
+        self._find_week_page = find_week_page
         self._limits = limits or EvidenceLimits()
         self._log = log or (lambda message: None)
 
@@ -143,6 +163,7 @@ class WeeklyEvidenceCollector:
         documents = self._read_documents(project.id, sorted(document_paths, key=_document_priority))
         commits, commit_count = self._read_commits(project.id, week, notes)
         site_text = self._read_site_text(project, notes)
+        week_page_url, week_page_text = self._read_week_page(project, week, notes)
         self._log(
             f"  {project.id}: {week_file_count} week files, {len(documents)} documents, "
             f"{commit_count} commits in window"
@@ -157,6 +178,8 @@ class WeeklyEvidenceCollector:
             commits=commits,
             documents=documents,
             site_text=site_text,
+            week_page_url=week_page_url,
+            week_page_text=week_page_text,
             notes=tuple(notes),
         )
 
@@ -208,6 +231,33 @@ class WeeklyEvidenceCollector:
         if isinstance(raw_commits, list) and len(raw_commits) >= 30 and in_window:
             notes.append("only the 30 most recent commits were inspected")
         return tuple(in_window[: self._limits.max_commits]), len(in_window)
+
+    def _read_week_page(
+        self, project: StudentProject, week: CourseWeek, notes: list[str]
+    ) -> tuple[str | None, str | None]:
+        if self._find_week_page is None or project.site_url is None:
+            return None, None
+        try:
+            page_url = self._find_week_page(project.site_url, week)
+        except Exception as error:  # discovery is best effort
+            notes.append(f"week page discovery failed: {type(error).__name__}")
+            return None, None
+        if page_url is None:
+            return None, None
+        if page_url.split("#", 1)[0].rstrip("/") == project.site_url.rstrip("/"):
+            return page_url, None  # a section of the root page; its text is site_text
+        if self._read_site is None:
+            return page_url, None
+        try:
+            page = self._read_site(page_url)
+        except Exception as error:  # an unreadable post must not stop the digest
+            notes.append(f"week page unreadable: {type(error).__name__}")
+            return page_url, None
+        text = page if isinstance(page, str) else page.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return page_url, None
+        compacted, _ = compact_text(text, limit=self._limits.max_week_page_chars)
+        return page_url, compacted or None
 
     def _read_site_text(self, project: StudentProject, notes: list[str]) -> str | None:
         if self._read_site is None or project.site_url is None:

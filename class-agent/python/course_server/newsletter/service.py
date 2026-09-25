@@ -41,7 +41,7 @@ from .render import cid_image_source, render_html, render_text
 from .schedule import select_week
 from .score import score_projects, select_highlights
 from .screenshots import ScreenshotError
-from .store import FileNewsletterStore
+from .store import LOGO_CONTENT_ID, LOGO_FILENAME, FileNewsletterStore
 
 
 class NewsletterStateError(RuntimeError):
@@ -189,6 +189,7 @@ class NewsletterService:
                     project_id=item.project_id,
                     label=item.label,
                     site_url=item.site_url,
+                    post_url=item.week_page_url,
                     posted=item.active,
                 )
                 for item in evidence
@@ -201,6 +202,55 @@ class NewsletterService:
         )
         self._store.save(issue)
         return issue
+
+    def rewrite_copy(self, issue_id: str) -> NewsletterIssue:
+        """Regenerate headline, editorial, highlights, and quote; keep selection and images."""
+
+        if self._collector is None or self._writer is None:
+            raise NewsletterStateError("Rewriting requires the repository collector and a writer.")
+        issue = self.load(issue_id)
+        if issue.status != "draft":
+            raise NewsletterStateError(
+                f"Issue {issue_id} is {issue.status}; only drafts are rewritten."
+            )
+        selected = issue.highlighted_project_ids()
+        if not selected or not issue.scores:
+            raise NewsletterStateError("This issue has no stored selection to rewrite from.")
+        evidence = self._collector.collect(issue.week)
+        digest = WeeklyDigest(
+            week=issue.week,
+            projects=evidence,
+            cooldown_project_ids=frozenset(
+                score.project_id for score in issue.scores if not score.eligible
+            ),
+            highlight_count=self._settings.highlight_count,
+        )
+        lecture = self._lecture_loader(issue.week)
+        copy, student_quote = compose_newsletter(
+            digest,
+            issue.scores,
+            self._writer,
+            selected=selected,
+            branding=self._settings.branding,
+            lecture=lecture,
+            link_checker=self._link_checker,
+        )
+        sites = {item.project_id: item.site_url for item in evidence}
+        quote = issue.quote
+        if student_quote is not None:
+            project_id, label, text = student_quote
+            quote = PioneerQuote(
+                text=text,
+                author=label,
+                source=f"from their week {issue.week.number} post",
+                url=sites.get(project_id),
+                kind="student",
+            )
+        updated = issue.model_copy(
+            update={"body": copy, "quote": quote, "created_at": self._clock()}
+        )
+        self._store.save(updated)
+        return updated
 
     def _find_images(
         self,
@@ -414,7 +464,12 @@ class NewsletterService:
         test_only: bool,
     ) -> NewsletterIssue:
         text = render_text(issue)
-        html = render_html(issue, image_src=cid_image_source)
+        logo = self._store.logo_bytes(issue.issue_id)
+        html = render_html(
+            issue,
+            image_src=cid_image_source,
+            logo_src=f"cid:{LOGO_CONTENT_ID}" if logo is not None else None,
+        )
         inline_images = tuple(
             InlineImage(
                 content_id=image.content_id,
@@ -424,6 +479,15 @@ class NewsletterService:
             )
             for image in issue.images
         )
+        if logo is not None:
+            inline_images += (
+                InlineImage(
+                    content_id=LOGO_CONTENT_ID,
+                    media_type="image/png",
+                    data=logo,
+                    filename=LOGO_FILENAME,
+                ),
+            )
         deliveries: list[Delivery] = []
         for address in addresses:
             attempted_at = self._clock()

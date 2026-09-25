@@ -89,6 +89,9 @@ MAX_EDITORIAL_LINKS = 2
 MAX_AVERAGE_SENTENCE_WORDS = 18
 MAX_SENTENCE_WORDS = 26
 MIN_READING_EASE = 50.0
+MIN_HIGHLIGHT_READING_EASE = 50.0
+# ALL_CAPS tokens, snake_case, and file names read as code to a classmate.
+_CODE_LIKE = re.compile(r"\b(?:[A-Z]{2,}_[A-Z_]+|[a-z]+_[a-z_]+|\w+\.(?:py|md|json|html|js|txt))\b")
 # Staff vocabulary that must not leak into student-facing copy. Kept narrow: words like
 # "score" are legitimate when describing a build that scores things.
 _BANNED_WORDS = re.compile(r"\b(brief|rubric)\b", re.IGNORECASE)
@@ -292,13 +295,18 @@ def build_highlights_system_prompt(branding: NewsletterBranding) -> str:
         "- Course staff already chose the featured builds and their order. Write one highlight "
         "per listed project, in the given order, using the given project ids.\n"
         "- Each highlight has a pun-friendly headline of at most six words and a description "
-        "of exactly two sentences (at most 40 words in total). The first sentence says what "
-        "the build is and what makes it interesting. The second sentence says specifically how "
-        "this particular build does what the assignment asked: name its concrete mechanism "
-        "(for example what it observes, which actions it chooses between, how it decides to "
-        "stop, what it verified), so that the sentence could only be about this build. Never "
-        "restate the assignment's wording and never reuse a sentence across highlights. An "
-        "image of the build appears above the text, so do not describe what it looks like."
+        "of exactly two sentences (at most 40 words in total; count them). Write for a "
+        "classmate who is still learning these concepts and has never seen this project: plain "
+        "everyday words, "
+        "as if explaining it to a friend. The first sentence says what the build does for a "
+        "person and what makes it interesting. The second sentence says specifically how this "
+        "particular build does what the assignment asked, in concrete terms (what it looks at, "
+        "what it chooses between, how it knows when to stop), so that the sentence could only be "
+        "about this build. Explain any technical term in a few words the first time; never use "
+        "an acronym, a code identifier, a file name, or a project-internal label as if the "
+        "reader already knows it. Never restate the assignment's wording and never reuse a "
+        "sentence across highlights. An image of the build appears above the text, so do not "
+        "describe what it looks like."
     )
 
 
@@ -319,8 +327,13 @@ def describe_project(project: ProjectEvidence, *, status: str) -> str:
         suffix = " (truncated)" if document.truncated else ""
         lines.append(f"document {document.path}{suffix}:")
         lines.append(document.text)
+    if project.week_page_url:
+        lines.append(f"this week's post on the site: {project.week_page_url}")
+    if project.week_page_text:
+        lines.append("text of this week's post:")
+        lines.append(project.week_page_text)
     if project.site_text:
-        lines.append("deployed site text:")
+        lines.append("deployed site home page text:")
         lines.append(project.site_text)
     if project.notes:
         lines.append("collection notes: " + "; ".join(project.notes))
@@ -383,7 +396,8 @@ def build_editorial_user_prompt(
         score = scored.get(project.project_id)
         if score is None:
             continue
-        site = f" / site: {project.site_url}" if project.site_url else ""
+        link = project.week_page_url or project.site_url
+        site = f" / site: {link}" if link else ""
         sections.append(
             f"- Submission {index}: built: {score.built or 'unclear'} / "
             f"went well: {score.went_well or 'n/a'} / struggled: {score.struggled or 'n/a'}{site}"
@@ -593,6 +607,19 @@ def validate_highlights(
                     f'{highlight.project_id} repeats a sentence from {owner}: "{sentence}"; '
                     "each description must be specific to its own build"
                 )
+        ease = reading_ease(highlight.description)
+        if ease < MIN_HIGHLIGHT_READING_EASE:
+            problems.append(
+                f"{highlight.project_id} description reading ease is {ease:.0f} (needs at least "
+                f"{MIN_HIGHLIGHT_READING_EASE:.0f}); use shorter, plainer words a classmate who "
+                "has not seen the project would understand"
+            )
+        code_like = _CODE_LIKE.search(highlight.description)
+        if code_like is not None:
+            problems.append(
+                f"{highlight.project_id} description uses the internal name "
+                f'"{code_like.group(0)}"; say it in plain words instead'
+            )
     return tuple(problems)
 
 
@@ -638,7 +665,10 @@ def compose_editorial(
             names=names,
             quotes=[text for _, _, text in quote_candidates(digest, scores)],
             project_urls=[
-                project.site_url for project in digest.projects if project.site_url is not None
+                url
+                for project in digest.projects
+                for url in (project.site_url, project.week_page_url)
+                if url is not None
             ],
             link_checker=link_checker,
         )
@@ -655,7 +685,7 @@ def compose_highlights(
     *,
     selected: Sequence[str],
     branding: NewsletterBranding,
-    max_attempts: int = 3,
+    max_attempts: int = 4,
 ) -> tuple[Highlight, ...]:
     """Highlight copy for exactly the selected projects; re-prompted once on rule breaks."""
 
