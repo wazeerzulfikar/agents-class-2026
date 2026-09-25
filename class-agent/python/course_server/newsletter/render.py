@@ -1,7 +1,7 @@
 """Deterministic plain-text and HTML renderings of a newsletter issue.
 
 The HTML follows the course site's visual language: a black ground, ivory display text,
-small letter-spaced monospace labels, muted secondary text, and fine rules. Every string
+italic serif section labels, softened secondary text, and fine rules. Every string
 that originated in the model or in repository metadata is escaped here, and only roster URLs
 resolved by platform code become links.
 """
@@ -23,15 +23,22 @@ _RULE = "-" * 60
 _GROUND = "#000000"
 _SURFACE = "#111111"
 _INK = "#f5f5f2"
-_INK_SOFT = "#c9c9c4"
-_MUTED = "#8b8b86"
+# Secondary tones sit well above the site's #8b8b86 so mail clients render them as text, not
+# as a watermark; the site's muted grey is fine on a screen but reads as faint in an inbox.
+_INK_SOFT = "#e4e4df"
+_MUTED = "#b4b4ae"
 _BORDER = "#2a2a28"
 _SANS = "'Helvetica Neue',Helvetica,Arial,sans-serif"
-_MONO = "SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace"
-_LABEL = (
-    f"font-family:{_MONO};font-size:11px;letter-spacing:0.14em;text-transform:uppercase;"
-    f"color:{_MUTED};"
+# Newsreader for clients that load the stylesheet (Apple Mail, iOS); Georgia everywhere else.
+_SERIF = "'Newsreader',Georgia,'Iowan Old Style','Times New Roman',serif"
+_FONT_HREF = (
+    "https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;"
+    "1,6..72,400&display=swap"
 )
+# Section labels and metadata: an italic serif in sentence case, the way a printed masthead
+# marks its departments.
+_LABEL = f"font-family:{_SERIF};font-style:italic;font-size:16px;line-height:1.4;color:{_MUTED};"
+_SECTION = f"font-family:{_SERIF};font-style:italic;font-size:19px;line-height:1.3;color:{_INK};"
 _UNDERLINED = (
     f"color:{_INK};text-decoration:none;border-bottom:1px solid {_BORDER};padding-bottom:3px;"
 )
@@ -170,7 +177,7 @@ def _highlight_html(issue: NewsletterIssue, index: int, *, image_src: ImageSourc
     return (
         f'<div style="margin:0 0 48px 0;">{figure}'
         f'<p style="margin:0 0 8px 0;{_LABEL}">{index:02d} &middot; {label}</p>'
-        f'<h2 style="margin:0 0 10px 0;font-family:{_SANS};font-size:24px;line-height:1.2;'
+        f'<h2 style="margin:0 0 10px 0;font-family:{_SERIF};font-size:26px;line-height:1.2;'
         f'font-weight:500;color:{_INK};">{escape(highlight.headline)}</h2>'
         f'<p style="margin:0;font-family:{_SANS};font-size:16px;line-height:1.55;'
         f'color:{_INK_SOFT};">{escape(highlight.description)}</p>'
@@ -191,17 +198,18 @@ def render_html(
         for index in range(1, len(issue.body.highlights) + 1)
     )
     others = issue.other_projects()
-    name_style = f"{_LABEL}color:{_INK};text-decoration:none;"
+    name_style = f"{_LABEL}font-style:normal;font-weight:500;color:{_INK};text-decoration:none;"
     other_names = (
         "".join(
             '<p style="margin:0 0 12px 0;">'
             + (
                 _anchor(link.post_url or link.site_url or "", escape(link.label), style=name_style)
                 if (link.post_url or link.site_url)
-                else f'<span style="{_LABEL}color:{_INK};">{escape(link.label)}</span>'
+                else f'<span style="{_LABEL}font-style:normal;font-weight:500;color:{_INK};">'
+                f"{escape(link.label)}</span>"
             )
-            + f'<br><span style="font-family:{_SANS};font-size:14px;line-height:1.5;'
-            f'color:{_MUTED};">'
+            + f'<br><span style="font-family:{_SANS};font-size:15px;line-height:1.5;'
+            f'color:{_INK_SOFT};">'
             + escape(issue.built_for(link.project_id) or "Nothing posted for this week yet.")
             + "</span></p>"
             for link in others
@@ -225,6 +233,7 @@ def render_html(
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         '<meta name="color-scheme" content="dark">'
         '<meta name="supported-color-schemes" content="dark">'
+        f'<link rel="stylesheet" href="{_FONT_HREF}">'
         # Mail clients that honor a stylesheet get an explicit dark scheme; the inline
         # bgcolor attributes below carry the ground for the ones that strip <style>.
         f"<style>:root{{color-scheme:dark;}}body,table,td{{background-color:{_GROUND};}}"
@@ -251,24 +260,24 @@ def render_html(
             else f'<p style="margin:0 0 28px 0;{_LABEL}">{escape(branding.newsletter_name)} '
             f"&middot; Issue {issue.week.number:02d}</p>"
         )
-        + f'<h1 style="margin:0 0 24px 0;font-family:{_SANS};font-size:34px;line-height:1.15;'
-        f'font-weight:500;letter-spacing:-0.01em;color:{_INK};">{escape(issue.body.headline)}</h1>'
+        + f'<h1 style="margin:0 0 24px 0;font-family:{_SERIF};font-size:38px;line-height:1.15;'
+        f'font-weight:500;color:{_INK};">{escape(issue.body.headline)}</h1>'
         f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(_window_label(issue))}</p>'
-        f'<p style="margin:0 0 6px 0;{_LABEL}">The assignment</p>'
+        f'<p style="margin:0 0 6px 0;{_SECTION}">The assignment</p>'
         f'<p style="margin:0 0 28px 0;font-family:{_SANS};font-size:20px;line-height:1.4;'
         f'font-weight:400;color:{_INK};">{escape(issue.week.tutorial)}</p>'
-        f'<p style="margin:0 0 12px 0;{_LABEL}">How the week went</p>'
+        f'<p style="margin:0 0 12px 0;{_SECTION}">How the week went</p>'
         f"{editorial}"
         f'<p style="margin:-6px 0 0 0;{_LABEL}">&mdash; {escape(branding.editor_name)}</p>'
         f"{rule}"
-        f'<p style="margin:0 0 24px 0;{_LABEL}">Highlights</p>'
+        f'<p style="margin:0 0 24px 0;{_SECTION}">Highlights</p>'
         f"{highlights}"
         f"{rule}"
-        f'<p style="margin:0 0 16px 0;{_LABEL}">All the other builds this week</p>'
+        f'<p style="margin:0 0 16px 0;{_SECTION}">All the other builds this week</p>'
         f"{other_names}"
         f"{rule}"
-        f'<p style="margin:0 0 12px 0;font-family:{_SANS};font-size:21px;line-height:1.4;'
-        f'font-weight:300;color:{_INK};">&ldquo;{escape(issue.quote.text)}&rdquo;</p>'
+        f'<p style="margin:0 0 12px 0;font-family:{_SERIF};font-size:23px;line-height:1.4;'
+        f'font-weight:400;color:{_INK};">&ldquo;{escape(issue.quote.text)}&rdquo;</p>'
         f'<p style="margin:0;{_LABEL}">{attribution}</p>'
         f"{rule}"
         f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(_course_line(issue))}</p>'

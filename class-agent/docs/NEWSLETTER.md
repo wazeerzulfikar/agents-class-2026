@@ -59,8 +59,11 @@ Every issue follows the same skimmable shape:
    to the class website, `https://cognitive-agents.media.mit.edu`.
 
 The email subject is `The Class Runtime from MAS.S60`. Each message is sent as plain text with an
-HTML alternative. The HTML follows the course site's look: black ground, ivory Helvetica display
-text, small letter-spaced monospace labels, muted secondary text, and fine rules.
+HTML alternative. The HTML pairs the course site's black ground and ivory text with an
+editorial serif: the headline, section labels ("The assignment", "How the week went") and the
+pull-quote are set in Newsreader, falling back to Georgia in clients such as Gmail that ignore
+linked fonts. Body copy stays in Helvetica. Secondary text uses lighter greys than the site so it
+reads as text in an inbox rather than as a watermark.
 
 ## How highlights are chosen
 
