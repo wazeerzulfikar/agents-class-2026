@@ -187,6 +187,8 @@ class GoogleGmailMailAdapter:
                         maintype=maintype,
                         subtype=subtype,
                         cid=f"<{image.content_id}>",
+                        filename=image.attachment_name,
+                        disposition="inline",
                     )
         return await self._send_mime(mime)
 

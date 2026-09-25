@@ -420,6 +420,7 @@ class NewsletterService:
                 content_id=image.content_id,
                 media_type=image.media_type,
                 data=self._store.load_image(issue.issue_id, image.filename),
+                filename=f"{issue.issue_id}-{image.filename}",
             )
             for image in issue.images
         )

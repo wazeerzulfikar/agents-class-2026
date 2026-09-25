@@ -174,7 +174,7 @@ class MicrosoftGraphMailAdapter:
                 "attachments": [
                     {
                         "@odata.type": "#microsoft.graph.fileAttachment",
-                        "name": f"{image.content_id}.{image.media_type.split('/', 1)[1]}",
+                        "name": image.attachment_name,
                         "contentType": image.media_type,
                         "contentBytes": base64.b64encode(image.data).decode("ascii"),
                         "contentId": image.content_id,

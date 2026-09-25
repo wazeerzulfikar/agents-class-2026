@@ -145,6 +145,12 @@ class InlineImage(MailModel):
     content_id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._-]{1,120}$")]
     media_type: Literal["image/jpeg", "image/png"]
     data: bytes = Field(min_length=1, max_length=2_000_000, repr=False)
+    # Shown by clients that list inline parts; without it Gmail labels the part "noname".
+    filename: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._-]{1,120}$")] | None = None
+
+    @property
+    def attachment_name(self) -> str:
+        return self.filename or f"{self.content_id}.{self.media_type.split('/', 1)[1]}"
 
 
 class OutboundMail(MailModel):

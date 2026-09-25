@@ -1060,6 +1060,7 @@ def test_gmail_adapter_embeds_inline_images_as_related_parts() -> None:
                         content_id="agents2026-ada",
                         media_type="image/jpeg",
                         data=b"\xff\xd8jpeg",
+                        filename="2026-week01-agents2026-ada.jpg",
                     ),
                 ),
             )
@@ -1075,6 +1076,8 @@ def test_gmail_adapter_embeds_inline_images_as_related_parts() -> None:
         images = [part for part in parsed.walk() if part.get_content_type() == "image/jpeg"]
         assert len(images) == 1
         assert images[0]["Content-ID"] == "<agents2026-ada>"
+        assert images[0].get_content_disposition() == "inline"
+        assert images[0].get_filename() == "2026-week01-agents2026-ada.jpg"
         assert images[0].get_content() == b"\xff\xd8jpeg"
         related = [part for part in parsed.walk() if part.get_content_type() == "multipart/related"]
         assert len(related) == 1
