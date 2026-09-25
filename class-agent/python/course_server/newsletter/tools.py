@@ -35,6 +35,13 @@ from .service import NewsletterService, NewsletterStateError
 from .store import FileNewsletterStore, NewsletterStoreError
 
 NEWSLETTER_CONFIRMATION_EVENT = "instructor.newsletter.confirmation_requested"
+# Per-run marker: once a running job has been reported in a turn, further polls are refused so
+# the agent ends its turn instead of spinning until the step limit.
+_POLLED_KEY = "newsletter_running_reported"
+_WAIT_MESSAGE = (
+    "The draft is still running and takes about five minutes in total. Do not check again in "
+    "this turn: end your reply now and tell the instructor to ask for the status in a few minutes."
+)
 _PREVIEW_CHARS = 1_200
 _SCOREBOARD_ROWS = 10
 
@@ -201,10 +208,11 @@ class InstructorDraftNewsletterTool:
                 "job": job_summary(job),
                 "started": started,
                 "message": (
-                    "Drafting started; it takes about five minutes. Ask for the newsletter "
-                    "status to see the scoreboard and draft."
+                    "Drafting started in the background; it takes about five minutes. Do not "
+                    "check the status in this turn: end your reply now and tell the instructor "
+                    "to ask for the newsletter status in a few minutes."
                     if started
-                    else "A draft is already running; check its status instead."
+                    else "A draft is already running; tell the instructor to ask again shortly."
                 ),
             },
             summary="Started a newsletter draft." if started else "A newsletter draft is running.",
@@ -262,10 +270,16 @@ class InstructorNewsletterStatusTool:
             raise ToolValidationError(str(error)) from error
         if job is None and issue is None:
             raise ToolValidationError("No newsletter has been drafted yet.")
+        running = job is not None and job.status == "running" and issue is None
+        if running:
+            if context.transient_state.get(_POLLED_KEY) is True:
+                raise ToolValidationError(_WAIT_MESSAGE)
+            context.transient_state[_POLLED_KEY] = True
         return ToolExecutionResult(
             content={
                 "job": job_summary(job) if job is not None else None,
                 "issue": issue_summary(issue, self._shared.store) if issue is not None else None,
+                **({"message": _WAIT_MESSAGE} if running else {}),
             },
             summary=(
                 f"Newsletter {issue.issue_id} is {issue.status}."

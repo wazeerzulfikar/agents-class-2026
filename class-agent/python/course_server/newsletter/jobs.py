@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -18,6 +18,8 @@ from .service import NewsletterService
 from .store import FileNewsletterStore
 
 MAX_LOG_LINES = 40
+# A job still "running" this long after it started belongs to a process that died.
+STALE_AFTER = timedelta(minutes=20)
 ServiceFactory = Callable[[Callable[[str], None]], NewsletterService]
 
 
@@ -74,14 +76,30 @@ class NewsletterJobRunner:
         return job, True
 
     def current(self) -> NewsletterJob | None:
-        return self._store.load_job(self._current_id) if self._current_id is not None else None
+        if self._current_id is None:
+            return None
+        return self._reconcile(self._store.load_job(self._current_id))
 
     def status(self, job_id: UUID) -> NewsletterJob | None:
-        return self._store.load_job(job_id)
+        return self._reconcile(self._store.load_job(job_id))
 
     def latest(self) -> NewsletterJob | None:
         jobs = self._store.list_jobs()
-        return jobs[-1] if jobs else None
+        return self._reconcile(jobs[-1]) if jobs else None
+
+    def _reconcile(self, job: NewsletterJob | None) -> NewsletterJob | None:
+        """Mark a job abandoned by a restarted process as failed instead of running forever."""
+
+        if job is None or job.status != "running":
+            return job
+        if self._clock() - job.started_at < STALE_AFTER:
+            return job
+        return self._update(
+            job.job_id,
+            status="failed",
+            error="The draft did not finish; the server restarted while it was running.",
+            finished_at=self._clock(),
+        )
 
     def _update(self, job_id: UUID, **changes: object) -> NewsletterJob:
         with self._lock:

@@ -1339,6 +1339,24 @@ def test_course_agent_tools_draft_review_and_prepare_send_for_instructors_only(
         with pytest.raises(ToolValidationError, match="No newsletter"):
             await status_tool.execute({}, tool_context(instructor))
 
+        # While a job runs, a turn may report it once; a second poll is refused so the agent
+        # ends its turn instead of spinning.
+        running = tools.runner._store
+        from course_server.newsletter.models import NewsletterJob
+
+        in_flight = NewsletterJob(
+            job_id=uuid4(), status="running", started_at=datetime(2026, 9, 22, 14, 50, tzinfo=UTC)
+        )
+        running.save_job(in_flight)
+        same_turn = tool_context(instructor)
+        first = await status_tool.execute({"job_id": str(in_flight.job_id)}, same_turn)
+        assert isinstance(first.content, dict) and "Do not check again" in str(
+            first.content["message"]
+        )
+        with pytest.raises(ToolValidationError, match="Do not check again"):
+            await status_tool.execute({"job_id": str(in_flight.job_id)}, same_turn)
+        running.save_job(in_flight.model_copy(update={"status": "failed", "error": "x"}))
+
         started = await draft_tool.execute({"week": 1}, tool_context(instructor))
         assert isinstance(started.content, dict)
         job = started.content["job"]
@@ -1522,6 +1540,19 @@ def test_job_runner_records_failures_and_refuses_concurrent_drafts(tmp_path: Pat
     runner._current_id = running.job_id  # simulate a job still in flight
     again, started_again = runner.start(week_number=2, force=False, requested_by_user_id=None)
     assert not started_again and again.job_id == running.job_id
+
+    # A job left "running" by a process that died is reported as failed after the stale window.
+    stale = running.model_copy(update={"started_at": datetime(2026, 9, 22, 14, 0, tzinfo=UTC)})
+    store.save_job(stale)
+    later = NewsletterJobRunner(
+        store=store,
+        service_factory=failing,
+        clock=lambda: datetime(2026, 9, 22, 15, 0, tzinfo=UTC),
+        run_in_thread=False,
+    )
+    reported = later.latest()
+    assert reported is not None and reported.status == "failed"
+    assert reported.error is not None and "restarted" in reported.error
 
 
 def test_capability_policy_exposes_newsletter_tools_only_to_instructors() -> None:
