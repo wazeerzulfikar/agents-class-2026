@@ -8,6 +8,7 @@ import os
 import sys
 from collections.abc import Mapping, Sequence
 from datetime import date
+from pathlib import Path
 from typing import TextIO
 
 from dotenv import load_dotenv
@@ -22,6 +23,7 @@ from .collect import WeeklyEvidenceCollector
 from .compose import NewsletterCompositionError, OpenAINewsletterWriter
 from .images import PlaywrightImageFinder
 from .models import NewsletterIssue, NewsletterSettings
+from .pdf import export_pdf
 from .render import render_html, render_text
 from .schedule import NewsletterScheduleError, load_schedule
 from .service import NewsletterService, NewsletterStateError
@@ -55,6 +57,9 @@ def _parser() -> argparse.ArgumentParser:
 
     commands.add_parser("list", help="list stored issues and their status")
 
+    pdf = commands.add_parser("pdf", help="export a stored issue as a single-page PDF")
+    pdf.add_argument("issue_id")
+
     send = commands.add_parser("send", help="email an approved draft")
     send.add_argument("issue_id")
     send.add_argument("--to", help="comma-separated recipients (adds to NEWSLETTER_RECIPIENTS)")
@@ -73,6 +78,14 @@ def _parser() -> argparse.ArgumentParser:
 
 def _split(value: str | None) -> tuple[str, ...]:
     return tuple(item.strip() for item in (value or "").split(",") if item.strip())
+
+
+def _browser(values: Mapping[str, str]) -> Path | None:
+    """The deployment's Chromium when it exists locally; otherwise Playwright's bundled one."""
+
+    raw = values.get("BROWSER_EXECUTABLE_PATH", "").strip()
+    candidate = Path(raw).expanduser() if raw else None
+    return candidate if candidate is not None and candidate.is_file() else None
 
 
 def _store(values: Mapping[str, str]) -> tuple[NewsletterSettings, FileNewsletterStore]:
@@ -258,6 +271,14 @@ def _run(
             week_number=arguments.week, as_of=arguments.as_of, force=arguments.force
         )
         _print_issue(issue, store, out=out)
+        try:
+            print(
+                f"PDF:   {export_pdf(store, issue.issue_id, executable_path=_browser(values))}",
+                file=out,
+            )
+        except NewsletterStoreError as error:
+            print(f"PDF export skipped: {error}", file=err)
+        print("", file=out)
         _print_scores(issue, out=out)
         for writer in _WRITERS:
             usage = writer.usage
@@ -289,6 +310,13 @@ def _run(
         if not arguments.html:
             _print_scores(stored, out=out)
         print(render_html(stored) if arguments.html else render_text(stored), file=out)
+        return 0
+    if arguments.command == "pdf":
+        _, store = _store(values)
+        if store.load(arguments.issue_id) is None:
+            print(f"Issue {arguments.issue_id} does not exist.", file=err)
+            return 2
+        print(export_pdf(store, arguments.issue_id, executable_path=_browser(values)), file=out)
         return 0
     if arguments.command == "list":
         _, store = _store(values)

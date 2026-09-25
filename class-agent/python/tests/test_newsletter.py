@@ -1198,6 +1198,12 @@ def test_cli_lists_shows_and_refuses_to_send_without_recipients_or_mail(tmp_path
     assert "2026-week01\t1\tdraft\t2026-09-22\t-\tagents2026-ada" in out.getvalue()
 
     err = io.StringIO()
+    assert newsletter_main(["pdf", "2026-week09"], environment=environment, out=out, err=err) == 2
+    out = io.StringIO()
+    assert newsletter_main(["pdf", "2026-week01"], environment=environment, out=out, err=err) == 0
+    pdf_path = Path(out.getvalue().strip())
+    assert pdf_path.name == "2026-week01.pdf" and pdf_path.read_bytes().startswith(b"%PDF")
+    err = io.StringIO()
     assert newsletter_main(["send", "2026-week01"], environment=environment, out=out, err=err) == 2
     assert "No recipients" in err.getvalue()
     err = io.StringIO()

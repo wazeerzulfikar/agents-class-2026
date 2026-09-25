@@ -112,9 +112,10 @@ uv run python -m course_server.newsletter draft
 uv run python -m course_server.newsletter draft --week 1
 uv run python -m course_server.newsletter draft --as-of 2026-09-22
 
-# Review a stored issue again, as text or HTML.
+# Review a stored issue again, as text or HTML, or export a single-page PDF to share.
 uv run python -m course_server.newsletter show 2026-week01
 uv run python -m course_server.newsletter show 2026-week01 --html
+uv run python -m course_server.newsletter pdf 2026-week01
 uv run python -m course_server.newsletter list
 
 # Send yourself a test copy; the issue stays a draft.
@@ -141,8 +142,10 @@ the shell. If a stale `OPENAI_API_KEY` is exported, the model request fails with
 ## Storage
 
 `NEWSLETTER_DATA_PATH` (default `var/newsletter/`, ignored by Git) holds `issues/<year>-weekNN.json`
-plus `.txt` and `.html` renderings for review, and `issues/<year>-weekNN/<project>.jpg` screenshots
-that the `.html` preview references relatively, so it opens correctly in a browser. The JSON record stores the week, the validated
+plus `.txt`, `.html`, and `.pdf` renderings for review (the PDF is one tall page rendered by headless
+Chromium, produced after each draft and on demand with `pdf`), and
+`issues/<year>-weekNN/<project>.jpg` images that the `.html` preview references relatively, so it
+opens correctly in a browser. The JSON record stores the week, the validated
 model copy, the project roster with links, the quote, status (`draft` or `sent`), and one delivery
 row per recipient with the provider message ID or the sanitized error class. Sent issues are the
 source of the fairness rule and of quote rotation, so keep this directory in staff backups.
