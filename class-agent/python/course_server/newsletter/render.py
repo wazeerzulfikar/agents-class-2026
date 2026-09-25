@@ -109,7 +109,7 @@ def render_text(issue: NewsletterIssue) -> str:
             _course_line(issue),
             f"Class website: {branding.course_site_url}",
             f"Curation and commentary by {branding.editor_name}.",
-            f"Sent by {branding.sender_name}.",
+            f"Reviewed by {branding.sender_name}.",
         ]
     )
     return "\n".join(lines).strip() + "\n"
@@ -219,13 +219,22 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
         '<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         '<meta name="color-scheme" content="dark">'
+        '<meta name="supported-color-schemes" content="dark">'
+        # Mail clients that honor a stylesheet get an explicit dark scheme; the inline
+        # bgcolor attributes below carry the ground for the ones that strip <style>.
+        f"<style>:root{{color-scheme:dark;}}body,table,td{{background-color:{_GROUND};}}"
+        f"a{{color:{_INK};}}</style>"
         f"<title>{escape(issue.subject)}</title></head>"
-        f'<body style="margin:0;padding:0;background:{_GROUND};color:{_INK};">'
+        f'<body bgcolor="{_GROUND}" style="margin:0;padding:0;background-color:{_GROUND};'
+        f'color:{_INK};">'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-        f'bgcolor="{_GROUND}" style="background:{_GROUND};"><tr><td align="center" '
-        'style="padding:40px 16px;">'
+        f'bgcolor="{_GROUND}" style="background-color:{_GROUND};"><tr>'
+        f'<td align="center" bgcolor="{_GROUND}" style="padding:40px 16px;'
+        f'background-color:{_GROUND};">'
         '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" '
-        'style="max-width:600px;width:100%;"><tr><td style="text-align:left;">'
+        f'bgcolor="{_GROUND}" style="max-width:600px;width:100%;background-color:{_GROUND};">'
+        f'<tr><td bgcolor="{_GROUND}" style="text-align:left;background-color:{_GROUND};'
+        f'color:{_INK};">'
         f'<p style="margin:0 0 28px 0;{_LABEL}">{escape(branding.newsletter_name)} '
         f"&middot; Issue {issue.week.number:02d}</p>"
         f'<h1 style="margin:0 0 24px 0;font-family:{_SANS};font-size:34px;line-height:1.15;'
@@ -258,6 +267,6 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
         + "</p>"
         f'<p style="margin:0 0 10px 0;{_LABEL}">Curation and commentary by '
         f"{escape(branding.editor_name)}</p>"
-        f'<p style="margin:0;{_LABEL}">Sent by {escape(branding.sender_name)}</p>'
+        f'<p style="margin:0;{_LABEL}">Reviewed by {escape(branding.sender_name)}</p>'
         "</td></tr></table></td></tr></table></body></html>\n"
     )

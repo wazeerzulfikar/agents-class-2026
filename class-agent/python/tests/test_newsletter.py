@@ -779,7 +779,8 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "brief" not in text.casefold() and "scroll" not in text.casefold()
     assert "\n\n— The Course Agent\n\n" in text
     assert (
-        "Curation and commentary by The Course Agent.\nSent by The MAS.S60 teaching team." in text
+        "Curation and commentary by The Course Agent.\nReviewed by The MAS.S60 teaching team."
+        in text
     )
     assert "Open it: https://a.example/" in text
     assert (
@@ -800,6 +801,8 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "How the week went</p>" in html
     assert "&mdash; The Course Agent</p>" in html
     assert "Curation and commentary by The Course Agent</p>" in html
+    assert "Reviewed by The MAS.S60 teaching team</p>" in html and "Sent by" not in html
+    assert html.count('bgcolor="#000000"') >= 4 and "supported-color-schemes" in html
     assert html.count("The loop ran.</p>") == 1
     assert (
         '<a href="https://arxiv.org/abs/2210.03629?x=1&amp;y=2"' in html
@@ -820,7 +823,7 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "Alan Turing" not in html and "<title>The Class Runtime from MAS.S60</title>" in html
     assert "&ldquo;Agents learn best when reality gets a vote.&rdquo;" in html
     assert '<a href="https://a.example/"' in html and "Ada, from their week 1 post</a>" in html
-    assert "background:#000000" in html and "#f5f5f2" in html
+    assert "background-color:#000000" in html and "#f5f5f2" in html
     assert "\u2019" not in html and "\u201c" not in html
 
 
