@@ -234,12 +234,14 @@ def render_html(
         f'color:{_INK};">'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
         f'bgcolor="{_GROUND}" style="background-color:{_GROUND};"><tr>'
+        # The flat gradient is deliberate: Gmail's app-side dark mode inverts plain background
+        # colors on dark emails but leaves gradient backgrounds alone.
         f'<td align="center" bgcolor="{_GROUND}" style="padding:40px 16px;'
-        f'background-color:{_GROUND};">'
+        f'background-color:{_GROUND};background-image:linear-gradient({_GROUND},{_GROUND});">'
         '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" '
         f'bgcolor="{_GROUND}" style="max-width:600px;width:100%;background-color:{_GROUND};">'
         f'<tr><td bgcolor="{_GROUND}" style="text-align:left;background-color:{_GROUND};'
-        f'color:{_INK};">'
+        f'background-image:linear-gradient({_GROUND},{_GROUND});color:{_INK};">'
         + (
             f'<img src="{escape(logo_src, quote=True)}" width="600" '
             f'alt="{escape(branding.newsletter_name)}" style="display:block;width:100%;'

@@ -856,6 +856,7 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert 'href="https://cognitive-agents.media.mit.edu"' in html
     assert "Alan Turing" not in html and "<title>The Class Runtime from MAS.S60</title>" in html
     assert "&ldquo;Agents learn best when reality gets a vote.&rdquo;" in html
+    assert html.count("linear-gradient(#000000,#000000)") == 2
     assert '<a href="https://a.example/"' in html and "Ada, from their week 1 post</a>" in html
     assert "background-color:#000000" in html and "#f5f5f2" in html
     assert "\u2019" not in html and "\u201c" not in html
@@ -943,8 +944,6 @@ def test_store_places_an_email_sized_logo_and_the_email_inlines_it(tmp_path: Pat
     html = (tmp_path / "newsletter/issues/2026-week01.html").read_text()
     assert 'src="2026-week01/newsletter-logo.png"' in html and 'alt="The Class Runtime"' in html
     assert "The Class Runtime &middot; Issue" not in html and ">Issue 01</p>" in html
-    store.clear_images("2026-week01")
-    assert placed.is_file()  # the logo survives image refreshes
     assert store.logo_bytes("2026-week01") == placed.read_bytes()
 
     async def scenario() -> None:
@@ -965,6 +964,9 @@ def test_store_places_an_email_sized_logo_and_the_email_inlines_it(tmp_path: Pat
         )
 
     asyncio.run(scenario())
+
+    store.clear_images("2026-week01")
+    assert placed.is_file()  # the logo survives image refreshes
 
     plain_store = FileNewsletterStore(tmp_path / "plain")
     plain_store.save(sample_issue())
