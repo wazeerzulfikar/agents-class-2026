@@ -77,6 +77,8 @@ def render_text(issue: NewsletterIssue) -> str:
         "",
         _MARKDOWN_LINK.sub(r"\1 (\2)", issue.body.editorial),
         "",
+        f"— {branding.editor_name}",
+        "",
         _RULE,
         "",
         "HIGHLIGHTS",
@@ -106,6 +108,7 @@ def render_text(issue: NewsletterIssue) -> str:
             "",
             _course_line(issue),
             f"Class website: {branding.course_site_url}",
+            f"Curation and commentary by {branding.editor_name}.",
             f"Sent by {branding.sender_name}.",
         ]
     )
@@ -233,6 +236,7 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
         f'font-weight:400;color:{_INK};">{escape(issue.week.tutorial)}</p>'
         f'<p style="margin:0 0 12px 0;{_LABEL}">How the week went</p>'
         f"{editorial}"
+        f'<p style="margin:-6px 0 0 0;{_LABEL}">&mdash; {escape(branding.editor_name)}</p>'
         f"{rule}"
         f'<p style="margin:0 0 24px 0;{_LABEL}">Highlights</p>'
         f"{highlights}"
@@ -252,6 +256,8 @@ def render_html(issue: NewsletterIssue, *, image_src: ImageSource | None = None)
             style=f"{_LABEL}{_UNDERLINED}",
         )
         + "</p>"
+        f'<p style="margin:0 0 10px 0;{_LABEL}">Curation and commentary by '
+        f"{escape(branding.editor_name)}</p>"
         f'<p style="margin:0;{_LABEL}">Sent by {escape(branding.sender_name)}</p>'
         "</td></tr></table></td></tr></table></body></html>\n"
     )

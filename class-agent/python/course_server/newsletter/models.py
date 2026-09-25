@@ -39,6 +39,8 @@ class NewsletterBranding(NewsletterModel):
         "https://cognitive-agents.media.mit.edu"
     )
     sender_name: ShortText = "The MAS.S60 teaching team"
+    # Signs the editorial and is credited for curation in the footer.
+    editor_name: ShortText = "The Course Agent"
 
 
 class NewsletterSettings(NewsletterModel):
@@ -83,6 +85,7 @@ class NewsletterSettings(NewsletterModel):
             institution=text("NEWSLETTER_INSTITUTION", defaults.institution),
             course_site_url=text("NEWSLETTER_COURSE_SITE_URL", defaults.course_site_url),
             sender_name=text("NEWSLETTER_SENDER_NAME", defaults.sender_name),
+            editor_name=text("NEWSLETTER_EDITOR_NAME", defaults.editor_name),
         )
         recipients = tuple(
             address.strip()

@@ -770,6 +770,10 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "   A minimal agent loop built from scratch. It is the loop asked for." in text
     assert "THE ASSIGNMENT: Build a minimal agent loop.\n\nThe loop ran." in text
     assert "brief" not in text.casefold() and "scroll" not in text.casefold()
+    assert "\n\n— The Course Agent\n\n" in text
+    assert (
+        "Curation and commentary by The Course Agent.\nSent by The MAS.S60 teaching team." in text
+    )
     assert "Open it: https://a.example/" in text
     assert (
         "ALL THE OTHER BUILDS THIS WEEK\n- Grace: Grace built a tiny tool-calling loop. "
@@ -787,6 +791,8 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "Ada &lt;script&gt;alert(1)&lt;/script&gt; loops" in html
     assert "<h1" in html and "Week one is in the loop." in html
     assert "How the week went</p>" in html
+    assert "&mdash; The Course Agent</p>" in html
+    assert "Curation and commentary by The Course Agent</p>" in html
     assert html.count("The loop ran.</p>") == 1
     assert (
         '<a href="https://arxiv.org/abs/2210.03629?x=1&amp;y=2"' in html
