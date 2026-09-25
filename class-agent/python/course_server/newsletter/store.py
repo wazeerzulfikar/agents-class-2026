@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from uuid import UUID
 
 from pydantic import ValidationError
 
-from .models import ISSUE_ID_PATTERN, NewsletterIssue
+from .models import ISSUE_ID_PATTERN, NewsletterIssue, NewsletterJob
 from .render import render_html, render_text
 
 _ISSUE_ID = re.compile(ISSUE_ID_PATTERN)
@@ -72,6 +73,38 @@ class FileNewsletterStore:
         if not path.is_file() or path.is_symlink():
             raise NewsletterStoreError(f"Image {filename} for {issue_id} is missing.")
         return path.read_bytes()
+
+    @property
+    def jobs_directory(self) -> Path:
+        return self._root / "jobs"
+
+    def save_job(self, job: NewsletterJob) -> Path:
+        self.jobs_directory.mkdir(parents=True, exist_ok=True)
+        path = self.jobs_directory / f"{job.job_id}.json"
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(job.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+        return path
+
+    def load_job(self, job_id: UUID) -> NewsletterJob | None:
+        path = self.jobs_directory / f"{job_id}.json"
+        if not path.is_file() or path.is_symlink():
+            return None
+        try:
+            return NewsletterJob.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValidationError, ValueError) as error:
+            raise NewsletterStoreError(f"Stored job {job_id} is unreadable.") from error
+
+    def list_jobs(self) -> tuple[NewsletterJob, ...]:
+        if not self.jobs_directory.is_dir():
+            return ()
+        jobs: list[NewsletterJob] = []
+        for path in sorted(self.jobs_directory.glob("*.json")):
+            try:
+                jobs.append(self.load_job(UUID(path.stem)) or None)  # type: ignore[arg-type]
+            except (ValueError, NewsletterStoreError):
+                continue
+        return tuple(sorted((job for job in jobs if job is not None), key=lambda j: j.started_at))
 
     def load(self, issue_id: str) -> NewsletterIssue | None:
         json_path, _, _ = self.paths_for(issue_id)

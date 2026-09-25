@@ -11,6 +11,7 @@ import {
   applyWorkspacePanelAction,
   clickBrowserSession,
   confirmInstructorMessage,
+  confirmNewsletter,
   confirmTAQuestion,
   continueAgentAfterEvent,
   createConversation,
@@ -46,6 +47,13 @@ import {
   type MobileView,
 } from "./MobileViewSwitcher.js";
 import { InstructorMessageConfirmation } from "./InstructorMessageConfirmation.js";
+import { NewsletterConfirmation } from "./NewsletterConfirmation.js";
+import {
+  applyNewsletterEvent,
+  pendingNewsletterContinuation,
+  projectNewsletterEvents,
+  type NewsletterConfirmation as NewsletterConfirmationState,
+} from "./newsletter.js";
 import {
   AgentResponse,
   RESPONSE_CHARACTER_STAGGER_MS,
@@ -277,6 +285,7 @@ export default function App() {
   const [taQuestion, setTAQuestion] = useState<TAQuestionConfirmationState | null>(null);
   const [instructorMessage, setInstructorMessage] =
     useState<InstructorMessageConfirmationState | null>(null);
+  const [newsletter, setNewsletter] = useState<NewsletterConfirmationState | null>(null);
   const [notificationCenter, setNotificationCenter] =
     useState<NotificationCenterData>(EMPTY_NOTIFICATION_CENTER);
   const [notificationHistoryExpanded, setNotificationHistoryExpanded] =
@@ -345,6 +354,7 @@ export default function App() {
       setWorkspaceState(projectedWorkspace);
       setTAQuestion(projectTAQuestionEvents(detail.events));
       setInstructorMessage(projectInstructorMessageEvents(detail.events));
+      setNewsletter(projectNewsletterEvents(detail.events));
       setActivities([]);
       setMobileView(projectedWorkspace.panels.length > 0 ? "workspace" : "chat");
       setPresentedCommunication(null);
@@ -352,7 +362,8 @@ export default function App() {
       setAboutOpen(false);
       const pendingContinuation =
         pendingTAQuestionContinuation(detail.events) ??
-        pendingInstructorMessageContinuation(detail.events);
+        pendingInstructorMessageContinuation(detail.events) ??
+        pendingNewsletterContinuation(detail.events);
       if (pendingContinuation) {
         await runAgentContinuation(conversation.id, pendingContinuation.id);
       }
@@ -793,6 +804,8 @@ export default function App() {
           setTAQuestion(event.confirmation);
         } else if (event.kind === "instructor_message_confirmation") {
           setInstructorMessage(event.confirmation);
+        } else if (event.kind === "newsletter_confirmation") {
+          setNewsletter(event.confirmation);
         } else if (event.kind === "done") {
           setActivities((current) => [
             ...current,
@@ -1062,6 +1075,25 @@ export default function App() {
       }
     } catch {
       setTAQuestion((current) => (current ? { ...current, status: "error" } : null));
+    }
+  }
+
+  async function handleNewsletterAction(action: "send" | "cancel"): Promise<void> {
+    if (!selectedConversationId || !newsletter || newsletter.status === "submitting") {
+      return;
+    }
+    setNewsletter((current) => (current ? { ...current, status: "submitting" } : null));
+    try {
+      const event = await confirmNewsletter(
+        selectedConversationId,
+        newsletter.issueId,
+        newsletter.confirmationId,
+        action,
+      );
+      setNewsletter((current) => applyNewsletterEvent(current, event));
+      await runAgentContinuation(selectedConversationId, event.id);
+    } catch {
+      setNewsletter((current) => (current ? { ...current, status: "error" } : null));
     }
   }
 
@@ -1560,6 +1592,13 @@ export default function App() {
               onAction={(action, edit) =>
                 void handleInstructorMessageAction(action, edit)
               }
+            />
+          ) : null}
+          {newsletter ? (
+            <NewsletterConfirmation
+              confirmation={newsletter}
+              key={newsletter.confirmationId}
+              onAction={(action) => void handleNewsletterAction(action)}
             />
           ) : null}
         </section>

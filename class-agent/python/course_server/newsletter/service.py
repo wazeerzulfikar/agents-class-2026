@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from pydantic import EmailStr, ValidationError
@@ -24,6 +25,7 @@ from .models import (
     CourseWeek,
     Delivery,
     HighlightImage,
+    NewsletterApproval,
     NewsletterIssue,
     NewsletterModel,
     NewsletterSettings,
@@ -261,6 +263,116 @@ class NewsletterService:
             raise NewsletterStateError(f"Issue {issue_id} does not exist; draft it first.")
         return issue
 
+    def request_send(
+        self,
+        issue_id: str,
+        *,
+        audience: str,
+        recipients: Sequence[str],
+        conversation_id: UUID,
+        requested_by_user_id: UUID,
+    ) -> NewsletterIssue:
+        """Freeze a recipient snapshot and hold the issue until the instructor confirms."""
+
+        issue = self.load(issue_id)
+        if issue.status not in {"draft", "awaiting_confirmation"}:
+            raise NewsletterStateError(f"Issue {issue_id} is {issue.status}; it cannot be resent.")
+        addresses = normalize_recipients(recipients)
+        if not addresses:
+            raise NewsletterStateError("At least one recipient is required.")
+        if audience not in {"all_students", "test"}:
+            raise NewsletterStateError("Audience must be all_students or test.")
+        approval = NewsletterApproval(
+            confirmation_id=uuid4(),
+            conversation_id=conversation_id,
+            requested_by_user_id=requested_by_user_id,
+            audience="all_students" if audience == "all_students" else "test",
+            recipients=addresses,
+            requested_at=self._clock(),
+        )
+        updated = issue.model_copy(update={"status": "awaiting_confirmation", "approval": approval})
+        self._store.save(updated)
+        return updated
+
+    def _awaiting(
+        self,
+        issue_id: str,
+        *,
+        confirmation_id: UUID,
+        conversation_id: UUID,
+        user_id: UUID,
+    ) -> NewsletterIssue:
+        issue = self.load(issue_id)
+        approval = issue.approval
+        if (
+            issue.status != "awaiting_confirmation"
+            or approval is None
+            or approval.confirmation_id != confirmation_id
+            or approval.conversation_id != conversation_id
+            or approval.requested_by_user_id != user_id
+        ):
+            raise NewsletterStateError("The newsletter is no longer awaiting confirmation.")
+        return issue
+
+    def confirm_send(
+        self,
+        issue_id: str,
+        *,
+        confirmation_id: UUID,
+        conversation_id: UUID,
+        user_id: UUID,
+    ) -> NewsletterIssue:
+        """Approve delivery; the mail worker sends to the frozen recipients on its next cycle."""
+
+        issue = self._awaiting(
+            issue_id,
+            confirmation_id=confirmation_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        assert issue.approval is not None
+        updated = issue.model_copy(
+            update={
+                "status": "approved",
+                "approval": issue.approval.model_copy(update={"decided_at": self._clock()}),
+            }
+        )
+        self._store.save(updated)
+        return updated
+
+    def cancel_send(
+        self,
+        issue_id: str,
+        *,
+        confirmation_id: UUID,
+        conversation_id: UUID,
+        user_id: UUID,
+    ) -> NewsletterIssue:
+        issue = self._awaiting(
+            issue_id,
+            confirmation_id=confirmation_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        updated = issue.model_copy(update={"status": "draft", "approval": None})
+        self._store.save(updated)
+        return updated
+
+    async def deliver_approved(self, mail: MailAdapter) -> tuple[NewsletterIssue, ...]:
+        """Outbox step for the mail worker: send every approved issue to its snapshot."""
+
+        delivered: list[NewsletterIssue] = []
+        for issue in self._store.list_issues():
+            if issue.status != "approved" or issue.approval is None:
+                continue
+            self._log(
+                f"Delivering {issue.issue_id} to {len(issue.approval.recipients)} recipients."
+            )
+            delivered.append(
+                await self._deliver(issue, mail, issue.approval.recipients, test_only=False)
+            )
+        return tuple(delivered)
+
     async def send(
         self,
         issue_id: str,
@@ -269,14 +381,31 @@ class NewsletterService:
         recipients: Sequence[str],
         test_only: bool = False,
     ) -> NewsletterIssue:
-        """Send one message per recipient. A test send never changes the stored issue."""
+        """Direct send from the command line. A test send never changes the stored issue."""
 
         issue = self.load(issue_id)
         if issue.status == "sent" and not test_only:
             raise NewsletterStateError(f"Issue {issue_id} was already sent on {issue.sent_at}.")
+        if issue.status != "draft" and not test_only:
+            raise NewsletterStateError(
+                f"Issue {issue_id} is {issue.status}; resolve it in the Course Agent first."
+            )
         addresses = normalize_recipients(recipients)
         if not addresses:
             raise NewsletterStateError("At least one recipient is required.")
+        updated = await self._deliver(issue, mail, addresses, test_only=test_only)
+        if not test_only and updated.status != "sent":
+            raise NewsletterStateError("No recipient accepted the newsletter; it remains a draft.")
+        return updated
+
+    async def _deliver(
+        self,
+        issue: NewsletterIssue,
+        mail: MailAdapter,
+        addresses: Sequence[str],
+        *,
+        test_only: bool,
+    ) -> NewsletterIssue:
         text = render_text(issue)
         html = render_html(issue, image_src=cid_image_source)
         inline_images = tuple(
@@ -323,12 +452,10 @@ class NewsletterService:
             return issue.model_copy(update={"deliveries": tuple(deliveries)})
         updated = issue.model_copy(
             update={
-                "status": "sent" if succeeded else "draft",
+                "status": "sent" if succeeded else issue.status,
                 "sent_at": self._clock() if succeeded else None,
                 "deliveries": tuple(deliveries),
             }
         )
         self._store.save(updated)
-        if not succeeded:
-            raise NewsletterStateError("No recipient accepted the newsletter; it remains a draft.")
         return updated

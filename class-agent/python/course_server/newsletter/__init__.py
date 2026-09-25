@@ -35,6 +35,7 @@ from .images import (
     discover_week_pages,
     filter_candidates,
 )
+from .jobs import NewsletterJobRunner
 from .lecture import (
     LectureNotes,
     compact_slides_text,
@@ -76,6 +77,15 @@ from .score import (
 from .screenshots import ScreenshotError, SiteScreenshot, encode_jpeg
 from .service import NewsletterService, NewsletterStateError, normalize_recipients
 from .store import FileNewsletterStore, NewsletterStoreError
+from .tools import (
+    NEWSLETTER_CONFIRMATION_EVENT,
+    InstructorDraftNewsletterTool,
+    InstructorNewsletterStatusTool,
+    InstructorSendNewsletterTool,
+    NewsletterTools,
+    issue_summary,
+    job_summary,
+)
 
 __all__ = [
     "EDITORIAL_MARKER",
@@ -83,6 +93,7 @@ __all__ = [
     "HIGHLIGHTS_MARKER",
     "HIGHLIGHTS_SCHEMA",
     "MIN_GOAL_FIT",
+    "NEWSLETTER_CONFIRMATION_EVENT",
     "PIONEER_QUOTES",
     "SCORE_SCHEMA",
     "SCORE_WEIGHTS",
@@ -99,18 +110,23 @@ __all__ = [
     "HighlightImageFinder",
     "ImageCandidate",
     "ImageJudge",
+    "InstructorDraftNewsletterTool",
+    "InstructorNewsletterStatusTool",
+    "InstructorSendNewsletterTool",
     "LectureNotes",
     "LinkChecker",
     "NewsletterBranding",
     "NewsletterCompositionError",
     "NewsletterCopy",
     "NewsletterIssue",
+    "NewsletterJobRunner",
     "NewsletterScheduleError",
     "NewsletterScoringError",
     "NewsletterService",
     "NewsletterSettings",
     "NewsletterStateError",
     "NewsletterStoreError",
+    "NewsletterTools",
     "NewsletterWriter",
     "OpenAINewsletterWriter",
     "PioneerQuote",
@@ -140,6 +156,8 @@ __all__ = [
     "encode_jpeg",
     "filter_candidates",
     "issue_id_for",
+    "issue_summary",
+    "job_summary",
     "learning_goals_from_syllabus",
     "link_resolves",
     "load_lecture_notes",

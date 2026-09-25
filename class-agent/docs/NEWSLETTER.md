@@ -1,8 +1,32 @@
 # The Class Runtime: instructor-run weekly newsletter
 
-`python -m course_server.newsletter` is a staff command, not a Course Agent capability. It never
-runs from the website, and students cannot trigger it. It produces one issue per finished class
-week, shows the draft to the instructor, and sends email only after an explicit approval step.
+The newsletter is a Course Agent capability for instructors, and also a staff command. An
+instructor can ask the Course Agent to draft, review, and send the week's issue, or run
+`python -m course_server.newsletter` directly; both paths run the same deterministic pipeline. It
+never runs for students, and nothing is emailed until the instructor approves it in the platform's
+confirmation surface.
+
+## Through the Course Agent
+
+The `instructor-newsletter` skill (audience `instructors`) teaches the agent the workflow, and
+platform code exposes three tools only to authenticated instructors:
+
+| Tool | What platform code does |
+| --- | --- |
+| `instructor.draft_newsletter` | Starts a background draft job (about five minutes) for the last finished week, or a given week. Returns a job id; the agent tells the instructor to ask again shortly. |
+| `instructor.newsletter_status` | Reports the latest or a named job, and once it is done returns the draft: headline, editorial, highlights with students and reasons, the closing quote, the scoreboard, and the HTML/PDF/text file paths. The agent presents this faithfully and never rewrites the copy. |
+| `instructor.send_newsletter` | Freezes a recipient snapshot (every active student account plus `NEWSLETTER_RECIPIENTS`, or the named test addresses) and emits `instructor.newsletter.confirmation_requested`. The web app shows a Send or Cancel card. |
+
+Send marks the issue `approved` through
+`POST /api/v1/conversations/{conversation_id}/newsletter/{issue_id}/confirmation`, which checks the
+instructor login, conversation ownership, and the confirmation id; the mail worker then delivers the
+approved issue to its snapshot on its next cycle and marks it `sent`. Cancel returns the issue to
+`draft`. The agent does not choose the highlights, write the copy, or pick the recipients; those
+remain the pipeline's and the instructor's decisions. Job records live under
+`var/newsletter/jobs/` and issues carry their approval snapshot, so the status is inspectable from
+files as well as from the agent.
+
+## From the command line
 
 ## What an issue contains
 

@@ -1,5 +1,6 @@
 import type { Conversation, Event, PrincipalContext, Uuid } from "@class-agent/protocol";
 import type { JsonValue } from "@class-agent/workspace";
+import { newsletterFromPayload, type NewsletterConfirmation } from "./newsletter.js";
 import {
   confirmationFromPayload,
   type TAQuestionConfirmation,
@@ -134,6 +135,7 @@ export type AgentStreamEvent =
       kind: "instructor_message_confirmation";
       confirmation: InstructorMessageConfirmation;
     }
+  | { kind: "newsletter_confirmation"; confirmation: NewsletterConfirmation }
   | { kind: "done" }
   | { kind: "error" };
 
@@ -252,6 +254,21 @@ export function confirmTAQuestion(
         reporter_visibility: reporterVisibility,
         ...(action === "send" && edit ? edit : {}),
       }),
+    },
+  );
+}
+
+export function confirmNewsletter(
+  conversationId: Uuid,
+  issueId: string,
+  confirmationId: string,
+  action: "send" | "cancel",
+): Promise<Event> {
+  return requestJson<Event>(
+    `/conversations/${conversationId}/newsletter/${encodeURIComponent(issueId)}/confirmation`,
+    {
+      method: "POST",
+      body: JSON.stringify({ action, confirmation_id: confirmationId }),
     },
   );
 }
@@ -754,6 +771,13 @@ function emitSseEvent(
       const confirmation = instructorMessageFromPayload(payload);
       if (confirmation) {
         onEvent({ kind: "instructor_message_confirmation", confirmation });
+      }
+      return;
+    }
+    if (type === "instructor.newsletter.confirmation_requested" && payload) {
+      const confirmation = newsletterFromPayload(payload);
+      if (confirmation) {
+        onEvent({ kind: "newsletter_confirmation", confirmation });
       }
       return;
     }

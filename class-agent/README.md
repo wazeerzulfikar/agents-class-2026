@@ -178,9 +178,11 @@ uv run pytest -m postgres
 
 ## Newsletter
 
-*The Class Runtime* is a staff-run weekly email of the best student builds. It is a command,
-not a website feature: nothing runs on a schedule and nothing is sent until an instructor types
-`SEND`. Run everything from `class-agent/` with the same `.env` the server uses (read-only GitHub
+*The Class Runtime* is a weekly email of the best student builds. Instructors can ask the Course
+Agent to draft, review, and send it (the `instructor-newsletter` skill and three instructor-only
+tools; Send is a platform confirmation card and the mail worker delivers approved issues), or run
+the same pipeline from the command line below. Nothing runs on a schedule and nothing is sent
+until an instructor approves it. Run everything from `class-agent/` with the same `.env` the server uses (read-only GitHub
 token, OpenAI key, Gmail credentials). If your shell exports a stale `OPENAI_API_KEY`, run
 `unset OPENAI_API_KEY` first so the `.env` value is used.
 

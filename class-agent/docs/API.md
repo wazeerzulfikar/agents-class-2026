@@ -32,6 +32,7 @@ POST /api/v1/conversations/{conversation_id}/workspace/actions
 POST /api/v1/conversations/{conversation_id}/workspace/interactions
 POST /api/v1/conversations/{conversation_id}/ta-questions/{question_id}/confirmation
 POST /api/v1/conversations/{conversation_id}/instructor-messages/{message_id}/confirmation
+POST /api/v1/conversations/{conversation_id}/newsletter/{issue_id}/confirmation
 POST /api/v1/conversations/{conversation_id}/continue
 POST /api/v1/conversations/{conversation_id}/greeting
 

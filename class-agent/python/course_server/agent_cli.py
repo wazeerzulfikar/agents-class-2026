@@ -79,6 +79,7 @@ from course_server.instructor_messages import (
 )
 from course_server.mail import CourseAskTATool, TAQuestionService
 from course_server.migrations import apply_migrations
+from course_server.newsletter.tools import NewsletterTools
 from course_server.postgres.auth_store import PostgresAuthStore, create_auth_pool
 from course_server.postgres.conversation_store import PostgresConversationStore
 from course_server.student_communications import (
@@ -164,6 +165,7 @@ def build_runtime(
     student_communications: StudentCommunicationService | None = None,
     faq_updates: FaqKnowledgeStore | None = None,
     student_projects: StudentProjectCatalog | None = None,
+    newsletter: NewsletterTools | None = None,
 ) -> SmolagentsRuntime:
     course_resources = (
         resources
@@ -304,6 +306,8 @@ def build_runtime(
                 InspectStudentRepositoryTool(project_catalog),
             ]
         )
+    if newsletter is not None:
+        executable_tools.extend(newsletter.tools())
     tools = ToolCatalog(executable_tools)
     provider = OpenAIModelProvider(
         model_id=settings.model_id,

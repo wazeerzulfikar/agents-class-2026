@@ -3,16 +3,21 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
 from PIL import Image
 from pydantic import JsonValue
 
+from agent_core import PrincipalContext
+from course_server.agent import ToolExecutionContext, ToolValidationError
+from course_server.auth import InMemoryAuthStore, UserAdminService
 from course_server.config import ConfigurationError
 from course_server.mail import InboundMail, OutboundMail, SentMail
 from course_server.newsletter import (
@@ -63,7 +68,9 @@ from course_server.newsletter import (
 )
 from course_server.newsletter.cli import main as newsletter_main
 from course_server.newsletter.compose import EDITORIAL_MARKER, HIGHLIGHTS_MARKER
+from course_server.newsletter.jobs import NewsletterJobRunner
 from course_server.newsletter.score import SCORING_MARKER
+from course_server.newsletter.tools import NewsletterTools
 from course_server.student_projects import (
     RepositoryView,
     StudentProject,
@@ -1226,3 +1233,392 @@ def test_cli_lists_shows_and_refuses_to_send_without_recipients_or_mail(tmp_path
         == 2
     )
     assert "does not exist" in err.getvalue()
+
+
+def staff_principal(role: str) -> PrincipalContext:
+    return PrincipalContext(
+        authenticated=True,
+        user_id=uuid4(),
+        username=f"test-{role}",
+        roles=["public", role],
+        session_id=uuid4(),
+    )
+
+
+def tool_context(principal: PrincipalContext) -> ToolExecutionContext:
+    return ToolExecutionContext(
+        principal=principal,
+        conversation_id=uuid4(),
+        permitted_resource_uris=frozenset(),
+    )
+
+
+def make_tools(tmp_path: Path, writer: ScriptedWriter) -> tuple[NewsletterTools, InMemoryAuthStore]:
+    store = FileNewsletterStore(tmp_path / "newsletter")
+    settings = NewsletterSettings(
+        highlight_count=2, highlight_cooldown_issues=2, recipients=("staff@mit.edu",)
+    )
+    weeks_ = weeks()
+
+    def factory(log: Callable[[str], None]) -> NewsletterService:
+        return NewsletterService(
+            settings=settings,
+            weeks=weeks_,
+            store=store,
+            collector=WeeklyEvidenceCollector(
+                fake_catalog(),
+                repository_prefix="agents2026-",
+                read_site=read_site,
+                limits=EvidenceLimits(workers=1),
+            ),
+            writer=writer,
+            image_finder=FakeImageFinder(),
+            link_checker=None,
+            lecture_loader=lambda week: None,
+            model_id="test-model",
+            clock=lambda: datetime(2026, 9, 22, 15, 0, tzinfo=UTC),
+            log=log,
+        )
+
+    runner = NewsletterJobRunner(
+        store=store,
+        service_factory=factory,
+        pdf_exporter=lambda issue_id: tmp_path / f"{issue_id}.pdf",
+        clock=lambda: datetime(2026, 9, 22, 15, 0, tzinfo=UTC),
+        run_in_thread=False,
+    )
+    auth = InMemoryAuthStore()
+    tools = NewsletterTools(
+        settings=settings,
+        store=store,
+        service=NewsletterService(settings=settings, weeks=weeks_, store=store),
+        runner=runner,
+        auth=auth,
+    )
+    return tools, auth
+
+
+def test_course_agent_tools_draft_review_and_prepare_send_for_instructors_only(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        writer = ScriptedWriter(
+            [copy_json("agents2026-ada", "agents2026-hal-9000")],
+            scores={
+                "agents2026-ada": score_json(9, 8, 7, rationale="Bold."),
+                "agents2026-hal-9000": score_json(7, 6, 6),
+            },
+        )
+        tools, auth = make_tools(tmp_path, writer)
+        admin = UserAdminService(auth)
+        await admin.create_user(
+            username="alice", display_name="Alice", email="alice@mit.edu", role="student"
+        )
+        await admin.create_user(
+            username="bob", display_name="Bob", email="bob@mit.edu", role="student"
+        )
+        parked = await admin.create_user(
+            username="carl", display_name="Carl", email="carl@mit.edu", role="student"
+        )
+        await admin.deactivate_user("carl")
+        assert parked.user.username == "carl"
+        await admin.create_user(username="ta", display_name="TA", email="ta@mit.edu", role="ta")
+        draft_tool, status_tool, send_tool = tools.tools()
+        instructor = staff_principal("instructor")
+
+        for role in ("student", "ta", "admin"):
+            with pytest.raises(ToolValidationError, match="instructor login"):
+                await draft_tool.execute({}, tool_context(staff_principal(role)))
+            with pytest.raises(ToolValidationError, match="instructor login"):
+                await status_tool.execute({}, tool_context(staff_principal(role)))
+            with pytest.raises(ToolValidationError, match="instructor login"):
+                await send_tool.execute(
+                    {"issue_id": "2026-week01", "audience": "test"},
+                    tool_context(staff_principal(role)),
+                )
+        with pytest.raises(ToolValidationError, match="No newsletter"):
+            await status_tool.execute({}, tool_context(instructor))
+
+        started = await draft_tool.execute({"week": 1}, tool_context(instructor))
+        assert isinstance(started.content, dict)
+        job = started.content["job"]
+        assert isinstance(job, dict) and job["status"] == "done" and started.content["started"]
+        assert job["issue_id"] == "2026-week01" and job["week"] == 1
+        assert started.storage_policy == "server_summary"
+
+        status = await status_tool.execute({}, tool_context(instructor))
+        assert isinstance(status.content, dict)
+        issue = status.content["issue"]
+        assert isinstance(issue, dict)
+        assert issue["status"] == "draft" and issue["headline"] == "Loop, There It Is"
+        highlights = cast(list[dict[str, JsonValue]], issue["highlights"])
+        assert [h["student"] for h in highlights] == ["Ada", "Hal 9000"]
+        scoreboard = cast(list[dict[str, JsonValue]], issue["scoreboard_top"])
+        assert scoreboard[0]["rationale"] == "Bold."
+        assert "THE CLASS RUNTIME" in str(issue["plain_text"])
+        by_id = await status_tool.execute({"job_id": str(job["job_id"])}, tool_context(instructor))
+        assert isinstance(by_id.content, dict) and by_id.content["issue"] is not None
+        with pytest.raises(ToolValidationError, match="does not exist"):
+            await status_tool.execute({"job_id": str(uuid4())}, tool_context(instructor))
+
+        with pytest.raises(ToolValidationError, match="test recipient"):
+            await send_tool.execute(
+                {"issue_id": "2026-week01", "audience": "test"}, tool_context(instructor)
+            )
+        context = tool_context(instructor)
+        prepared = await send_tool.execute(
+            {"issue_id": "2026-week01", "audience": "all_students"}, context
+        )
+        assert isinstance(prepared.content, dict)
+        assert prepared.content["confirmation_required"] is True
+        assert prepared.content["recipient_count"] == 3  # alice, bob, staff list; carl inactive
+        event = prepared.emitted_events[0]
+        assert event.type == "instructor.newsletter.confirmation_requested"
+        assert event.payload["audience"] == "all_students" and event.payload["recipients"] == []
+        assert event.payload["headline"] == "Loop, There It Is"
+        assert event.metadata == {"visibility": "private"}
+        stored = tools.store.load("2026-week01")
+        assert stored is not None and stored.status == "awaiting_confirmation"
+        assert stored.approval is not None
+        assert set(stored.approval.recipients) == {"alice@mit.edu", "bob@mit.edu", "staff@mit.edu"}
+        assert stored.approval.conversation_id == context.conversation_id
+
+        # A test audience lists its recipients and replaces the pending snapshot.
+        test = await send_tool.execute(
+            {
+                "issue_id": "2026-week01",
+                "audience": "test",
+                "test_recipients": ["me@mit.edu", "me@mit.edu"],
+            },
+            context,
+        )
+        assert test.emitted_events[0].payload["recipients"] == ["me@mit.edu"]
+
+    asyncio.run(scenario())
+
+
+def test_send_requires_the_platform_confirmation_and_the_worker_drains_approved_issues(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        writer = ScriptedWriter(
+            [copy_json("agents2026-ada", "agents2026-hal-9000")],
+            scores={"agents2026-ada": score_json(9, 8, 7)},
+        )
+        tools, _ = make_tools(tmp_path, writer)
+        tools.runner.start(week_number=1, force=False, requested_by_user_id=None)
+        service = tools.service
+        conversation_id = uuid4()
+        instructor_id = uuid4()
+
+        held = service.request_send(
+            "2026-week01",
+            audience="test",
+            recipients=["me@mit.edu"],
+            conversation_id=conversation_id,
+            requested_by_user_id=instructor_id,
+        )
+        assert held.status == "awaiting_confirmation" and held.approval is not None
+        confirmation_id = held.approval.confirmation_id
+
+        # The CLI's direct send refuses while the Course Agent holds the issue.
+        adapter = RecordingMailAdapter()
+        with pytest.raises(NewsletterStateError, match="resolve it in the Course Agent"):
+            await service.send("2026-week01", mail=adapter, recipients=["x@mit.edu"])
+        assert await service.deliver_approved(adapter) == ()
+
+        # Only the same instructor, conversation, and confirmation id may decide.
+        with pytest.raises(NewsletterStateError, match="no longer awaiting"):
+            service.confirm_send(
+                "2026-week01",
+                confirmation_id=uuid4(),
+                conversation_id=conversation_id,
+                user_id=instructor_id,
+            )
+        with pytest.raises(NewsletterStateError, match="no longer awaiting"):
+            service.confirm_send(
+                "2026-week01",
+                confirmation_id=confirmation_id,
+                conversation_id=uuid4(),
+                user_id=instructor_id,
+            )
+        with pytest.raises(NewsletterStateError, match="no longer awaiting"):
+            service.cancel_send(
+                "2026-week01",
+                confirmation_id=confirmation_id,
+                conversation_id=conversation_id,
+                user_id=uuid4(),
+            )
+
+        cancelled = service.cancel_send(
+            "2026-week01",
+            confirmation_id=confirmation_id,
+            conversation_id=conversation_id,
+            user_id=instructor_id,
+        )
+        assert cancelled.status == "draft" and cancelled.approval is None
+        with pytest.raises(NewsletterStateError, match="no longer awaiting"):
+            service.confirm_send(
+                "2026-week01",
+                confirmation_id=confirmation_id,
+                conversation_id=conversation_id,
+                user_id=instructor_id,
+            )
+
+        held = service.request_send(
+            "2026-week01",
+            audience="all_students",
+            recipients=["a@mit.edu", "b@mit.edu"],
+            conversation_id=conversation_id,
+            requested_by_user_id=instructor_id,
+        )
+        assert held.approval is not None
+        approved = service.confirm_send(
+            "2026-week01",
+            confirmation_id=held.approval.confirmation_id,
+            conversation_id=conversation_id,
+            user_id=instructor_id,
+        )
+        assert approved.status == "approved"
+        assert approved.approval is not None and approved.approval.decided_at is not None
+        assert adapter.sent == []
+
+        delivered = await service.deliver_approved(adapter)
+        assert [issue.status for issue in delivered] == ["sent"]
+        assert [message.to for message in adapter.sent] == [("a@mit.edu",), ("b@mit.edu",)]
+        assert adapter.sent[0].inline_images[0].content_id == "agents2026-ada"
+        assert await service.deliver_approved(adapter) == ()
+        final = tools.store.load("2026-week01")
+        assert final is not None and final.status == "sent" and len(final.deliveries) == 2
+        with pytest.raises(NewsletterStateError, match="cannot be resent"):
+            service.request_send(
+                "2026-week01",
+                audience="test",
+                recipients=["me@mit.edu"],
+                conversation_id=conversation_id,
+                requested_by_user_id=instructor_id,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_job_runner_records_failures_and_refuses_concurrent_drafts(tmp_path: Path) -> None:
+    store = FileNewsletterStore(tmp_path / "newsletter")
+
+    def failing(log: Callable[[str], None]) -> NewsletterService:
+        log("collecting")
+        raise RuntimeError("GitHub is down")
+
+    runner = NewsletterJobRunner(store=store, service_factory=failing, run_in_thread=False)
+    job, started = runner.start(week_number=None, force=False, requested_by_user_id=None)
+    assert started
+    failed = runner.status(job.job_id)
+    assert failed is not None and failed.status == "failed"
+    assert failed.error == "RuntimeError: GitHub is down" and failed.log == ("collecting",)
+    assert runner.latest() == failed
+
+    running = failed.model_copy(update={"status": "running", "finished_at": None})
+    store.save_job(running)
+    runner._current_id = running.job_id  # simulate a job still in flight
+    again, started_again = runner.start(week_number=2, force=False, requested_by_user_id=None)
+    assert not started_again and again.job_id == running.job_id
+
+
+def test_capability_policy_exposes_newsletter_tools_only_to_instructors() -> None:
+    from course_server.agent import CourseCapabilityPolicy
+    from course_server.newsletter_tool_ids import NEWSLETTER_TOOL_IDS
+
+    enabled = CourseCapabilityPolicy(newsletter_enabled=True)
+    disabled = CourseCapabilityPolicy(newsletter_enabled=False)
+    assert set(NEWSLETTER_TOOL_IDS) <= set(
+        enabled.authorize(staff_principal("instructor")).tool_ids
+    )
+    for role in ("student", "ta", "admin"):
+        assert not set(NEWSLETTER_TOOL_IDS) & set(enabled.authorize(staff_principal(role)).tool_ids)
+    assert not set(NEWSLETTER_TOOL_IDS) & set(
+        disabled.authorize(staff_principal("instructor")).tool_ids
+    )
+
+
+def test_newsletter_confirmation_endpoint_checks_instructor_ownership_and_state(
+    tmp_path: Path,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from agent_core import AgentRuntime
+    from course_server.agent import CourseAgentService, InMemoryConversationStore
+    from course_server.api import API_PREFIX, AppServices, create_app
+    from course_server.auth import AuthenticationService
+
+    auth = InMemoryAuthStore()
+    admin = UserAdminService(auth)
+
+    async def create_users() -> tuple[str, str, UUID]:
+        student = await admin.create_user(
+            username="student", display_name="Student", email="s@mit.edu", role="student"
+        )
+        instructor = await admin.create_user(
+            username="prof", display_name="Prof", email="p@mit.edu", role="instructor"
+        )
+        return student.access_code, instructor.access_code, instructor.user.id
+
+    student_code, instructor_code, instructor_id = asyncio.run(create_users())
+    store = FileNewsletterStore(tmp_path / "newsletter")
+    store.save(sample_issue())
+    service = NewsletterService(settings=NewsletterSettings(), weeks=weeks(), store=store)
+    conversations = InMemoryConversationStore()
+    app = create_app(
+        services=AppServices(
+            authentication=AuthenticationService(auth),
+            agent=CourseAgentService(
+                runtime=cast(AgentRuntime, object()), conversations=conversations
+            ),
+            conversations=conversations,
+            newsletter=service,
+        )
+    )
+    instructor_client = TestClient(app, base_url="https://testserver")
+    student_client = TestClient(app, base_url="https://testserver")
+    assert (
+        instructor_client.post(
+            f"{API_PREFIX}/auth/login", json={"username": "prof", "access_code": instructor_code}
+        ).status_code
+        == 200
+    )
+    assert (
+        student_client.post(
+            f"{API_PREFIX}/auth/login", json={"username": "student", "access_code": student_code}
+        ).status_code
+        == 200
+    )
+    conversation_id = UUID(
+        instructor_client.post(f"{API_PREFIX}/conversations", json={}).json()["id"]
+    )
+    held = service.request_send(
+        "2026-week01",
+        audience="test",
+        recipients=["me@mit.edu"],
+        conversation_id=conversation_id,
+        requested_by_user_id=instructor_id,
+    )
+    assert held.approval is not None
+    url = f"{API_PREFIX}/conversations/{conversation_id}/newsletter/2026-week01/confirmation"
+    body = {"action": "send", "confirmation_id": str(held.approval.confirmation_id)}
+
+    assert student_client.post(url, json=body).status_code == 404
+    wrong = instructor_client.post(url, json={**body, "confirmation_id": str(uuid4())})
+    assert wrong.status_code == 409
+    approved = instructor_client.post(url, json=body)
+    assert approved.status_code == 200
+    assert approved.json()["type"] == "instructor.newsletter.approved"
+    assert approved.json()["payload"] == {
+        "issue_id": "2026-week01",
+        "confirmation_id": str(held.approval.confirmation_id),
+        "subject": "The Class Runtime from MAS.S60",
+        "recipient_count": 1,
+        "status": "approved",
+    }
+    stored = store.load("2026-week01")
+    assert stored is not None and stored.status == "approved"
+    assert instructor_client.post(url, json=body).status_code == 409
+    assert instructor_client.post(url, json={**body, "action": "cancel"}).status_code == 409

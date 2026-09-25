@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
@@ -239,6 +240,38 @@ class HighlightImage(NewsletterModel):
         return self.project_id
 
 
+IssueStatus = Literal["draft", "awaiting_confirmation", "approved", "sent"]
+
+
+class NewsletterApproval(NewsletterModel):
+    """The instructor's send request: a fixed recipient snapshot awaiting or holding approval."""
+
+    confirmation_id: UUID
+    conversation_id: UUID
+    requested_by_user_id: UUID
+    audience: Literal["all_students", "test"]
+    recipients: tuple[EmailStr, ...] = Field(min_length=1, max_length=500)
+    requested_at: AwareDatetime
+    decided_at: AwareDatetime | None = None
+
+
+JobStatus = Literal["running", "done", "failed"]
+
+
+class NewsletterJob(NewsletterModel):
+    """A background draft run started from the Course Agent; persisted for status queries."""
+
+    job_id: UUID
+    status: JobStatus
+    requested_by_user_id: UUID | None = None
+    week_number: int | None = None
+    issue_id: str | None = None
+    error: str | None = None
+    started_at: AwareDatetime
+    finished_at: AwareDatetime | None = None
+    log: tuple[str, ...] = ()
+
+
 class Delivery(NewsletterModel):
     recipient: EmailStr
     provider_message_id: str | None = None
@@ -260,7 +293,8 @@ class NewsletterIssue(NewsletterModel):
     scores: tuple[ProjectScore, ...] = ()
     images: tuple[HighlightImage, ...] = ()
     model_id: str | None = None
-    status: Literal["draft", "sent"] = "draft"
+    status: IssueStatus = "draft"
+    approval: NewsletterApproval | None = None
     created_at: AwareDatetime
     sent_at: AwareDatetime | None = None
     deliveries: tuple[Delivery, ...] = ()
