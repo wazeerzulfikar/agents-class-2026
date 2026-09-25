@@ -368,6 +368,13 @@ class NewsletterService:
             self._log(
                 f"Delivering {issue.issue_id} to {len(issue.approval.recipients)} recipients."
             )
+            if issue.approval.audience == "test":
+                # A test copy never counts as the class send: record it and return to draft.
+                tested = await self._deliver(issue, mail, issue.approval.recipients, test_only=True)
+                reverted = tested.model_copy(update={"status": "draft", "approval": None})
+                self._store.save(reverted)
+                delivered.append(reverted)
+                continue
             delivered.append(
                 await self._deliver(issue, mail, issue.approval.recipients, test_only=False)
             )

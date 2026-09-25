@@ -1483,6 +1483,27 @@ def test_send_requires_the_platform_confirmation_and_the_worker_drains_approved_
                 user_id=instructor_id,
             )
 
+        # An approved test copy is delivered but leaves the issue a draft for the real send.
+        trial = service.request_send(
+            "2026-week01",
+            audience="test",
+            recipients=["me@mit.edu"],
+            conversation_id=conversation_id,
+            requested_by_user_id=instructor_id,
+        )
+        assert trial.approval is not None
+        service.confirm_send(
+            "2026-week01",
+            confirmation_id=trial.approval.confirmation_id,
+            conversation_id=conversation_id,
+            user_id=instructor_id,
+        )
+        tested = await service.deliver_approved(adapter)
+        assert [issue.status for issue in tested] == ["draft"]
+        assert [message.to for message in adapter.sent] == [("me@mit.edu",)]
+        assert tested[0].approval is None and tested[0].deliveries[0].recipient == "me@mit.edu"
+        adapter.sent.clear()
+
         held = service.request_send(
             "2026-week01",
             audience="all_students",
