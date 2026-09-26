@@ -47,6 +47,8 @@ Every issue follows the same skimmable shape:
 2. Four highlights (configurable). Each one shows an image from the student's own post, names
    the student, and gives a headline plus two sentences: what the build is and what makes it
    interesting, then specifically how it does what the assignment asked. A link opens the site.
+   After the last highlight, one line links to the public explainer on the course site,
+   `https://cognitive-agents.media.mit.edu/newsletter/highlights` (see below).
 3. Every other student who posted work that week, with one sentence on what they built and a
    link to their site. Students with nothing beyond the starter template are left off the list.
 4. A closing quote. Preferably a line from a student's own post that week, featured or not: the
@@ -55,8 +57,10 @@ Every issue follows the same skimmable shape:
    collected prose, and the editorial call picks the one with the most personality, attributed and
    linked to the student's site. When no verified candidate exists, a curated quote from an AI or computing
    pioneer is used instead, rotated across issues.
-5. The course line (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`) and a link
-   to the class website, `https://cognitive-agents.media.mit.edu`.
+5. A colophon, in this order: the credits ("Curation and commentary by The Course Agent",
+   "Reviewed by the MAS.S60 teaching team"), then the course line
+   (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`), and last the class
+   website, `cognitive-agents.media.mit.edu`.
 
 The email subject is `The Class Runtime from MAS.S60`. Each message is sent as plain text with an
 HTML alternative. The HTML keeps the course site's black ground and ivory Helvetica, with
@@ -80,29 +84,54 @@ whether or not a client also recolors border colors inside the wrappers.
 
 ## How highlights are chosen
 
-Every active project is scored, one model call each, against a fixed rubric from its bounded
-evidence: `interest` (how interesting the idea and the result are), `execution` (complete,
-working, documented), and `goal_fit` (did the student properly do what the week asked). The same
-call produces the staff notes reused everywhere else: one sentence on what the student built, what
+Every active project is scored, one model call each, from its bounded evidence against a fixed
+rubric of four criteria, each 0 to 10:
+
+| Criterion | Key | Weight | What it asks |
+| --- | --- | --- | --- |
+| Originality | `originality` | 30% | How far outside the box the idea and approach are: an unexpected problem, domain, or mechanism, ambition, surprising findings. The tutorial's default example re-skinned scores 4 or below. |
+| Assignment fit | `goal_fit` | 25% | Whether the student did what the week's assignment asked, not something adjacent. Missing its core scores 3 or below. |
+| Cognitive augmentation | `augmentation` | 25% | How directly the build helps a person think, remember, learn, focus, decide, or create while staying in charge. A build that helps no person scores 2 or below. |
+| Execution | `execution` | 20% | Whether it works and the post shows it (demo, trace, write-up); honest failure analysis counts in its favor. |
+
+The rubric is defined once, as `RUBRIC` in `score.py`: the scoring prompt, the JSON schema, the
+weights, and the instructor scoreboard all read it. Originality absorbed the earlier `interest`
+criterion, and issues scored before the change still load (their `interest` becomes
+`originality`, with no augmentation score). The same call produces the staff notes reused everywhere else: one sentence on what the student built, what
 went well, and what they struggled with. The editorial and headline are written from those notes
 across the whole class, so the model reads every submission before it writes a word. Platform
-code computes the total (goal fit 40%, interest 40%, execution 20%), ranks every project that met
-the goal-fit floor ahead of every project that did not, excludes students featured in the last
-`NEWSLETTER_HIGHLIGHT_COOLDOWN_ISSUES` sent issues, breaks ties deterministically, and takes the
-top `NEWSLETTER_HIGHLIGHT_COUNT`. The model then writes copy for exactly those projects in that
+code computes the weighted total, ranks every project with an assignment fit of at least
+`MIN_GOAL_FIT` (5) ahead of every project below it, excludes students featured in the last
+`NEWSLETTER_HIGHLIGHT_COOLDOWN_ISSUES` sent issues, breaks ties by assignment fit, then
+originality, then cognitive augmentation, then project id, and takes the top
+`NEWSLETTER_HIGHLIGHT_COUNT`. The model then writes copy for exactly those projects in that
 order; a response that changes the set or order is re-prompted once and then rejected. The full
 scoreboard with rationales is stored in the issue and printed by `draft` and `show`, so the choice
 is inspectable.
+
+Students see the same rules, in plain language, on the course site at `/newsletter/highlights`.
+That page is the public course resource `course://newsletter-highlights`
+(`shared/course/newsletter/highlights.md`), rendered by the web app with the syllabus page's
+component, so the Course Agent can also answer questions about it. A test checks that its
+criteria, weights, questions, goal-fit floor, cooldown, and highlight count match the code; change
+both together.
 
 ## Highlight images
 
 For each featured build the finder opens the student's site in headless Chromium (the same
 Playwright dependency the agent's browser uses; `BROWSER_EXECUTABLE_PATH` is honored when it
 exists), follows same-site links that name the week to the student's post, and measures the visual
-elements rendered there: images, SVG figures, canvases, and videos. Visible elements at least 300
-by 160 CSS pixels with a sane aspect ratio are candidates, largest first, and each is captured at
-2x as its own element screenshot, so vector figures and live canvases work as well as photos. The
-model picks the capture that best represents the build (rendered results, demos, diagrams over
+elements rendered there: images, SVG figures, canvases, and videos. Before measuring, the page
+settles the way it would for a visitor: lazy images are loaded by scrolling, web fonts are awaited,
+and images that failed to load are skipped. Visible elements at least 280 by 140 CSS pixels with a
+sane aspect ratio are candidates, largest first, and each is captured at 2x as its own element
+screenshot, so vector figures and live canvases work as well as photos. A video with a poster
+contributes the poster itself, fetched at full size, because it is the frame the student chose;
+otherwise a decoded frame is captured. Some sites publish each week as an HTML fragment that
+their script loads into a styled shell (with relative media paths that only resolve against the
+site root). Such a fragment is read inside a minimal document whose base is the site root, as the
+site reads it, and is never screenshotted bare; if it offers no usable visual, the fallback is
+the styled site root. The model picks the capture that best represents the build (rendered results, demos, diagrams over
 logos, icons, and portraits). The chosen capture is flattened onto black, downscaled to 1200 pixels
 wide, encoded as JPEG, stored beside the issue with its source and page URL, and embedded in the
 email as an inline `cid:` image. Root-page visuals are considered only when the site has no week post. When a post

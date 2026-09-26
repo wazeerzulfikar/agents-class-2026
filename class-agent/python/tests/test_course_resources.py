@@ -234,6 +234,7 @@ def test_public_resource_registry_includes_provisional_schedule() -> None:
         "course://faq",
         "course://instructors",
         "course://application",
+        "course://newsletter-highlights",
         "course://slides/week-01",
     ]
     instructors = next(summary for summary in summaries if summary.uri == COURSE_INSTRUCTORS_URI)

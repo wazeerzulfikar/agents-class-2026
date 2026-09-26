@@ -12,12 +12,15 @@ import re
 from collections.abc import Callable
 from datetime import date, timedelta
 from html import escape
+from urllib.parse import urlsplit
 
 from .models import HighlightImage, NewsletterIssue, ProjectLink
 
 _MARKDOWN_LINK = re.compile(r"\[([^\]\n]{1,120})\]\((https://[^\s)]+)\)")
 
 _RULE = "-" * 60
+# The course site's public page explaining highlight selection (apps/web/src/aboutRoute.ts).
+HIGHLIGHTS_PAGE_PATH = "/newsletter/highlights"
 
 # Mirrors packages/ui/src/styles.css tokens; email clients need literal values.
 _GROUND = "#000000"
@@ -87,6 +90,25 @@ def _course_line(issue: NewsletterIssue) -> str:
     )
 
 
+def highlights_page_url(issue: NewsletterIssue) -> str:
+    return issue.branding.course_site_url.rstrip("/") + HIGHLIGHTS_PAGE_PATH
+
+
+def _in_sentence(name: str) -> str:
+    """'The MAS.S60 teaching team' reads as 'the MAS.S60 teaching team' mid-sentence."""
+
+    return f"the {name[4:]}" if name.startswith("The ") else name
+
+
+def _selection_line(issue: NewsletterIssue) -> str:
+    return f"How {_in_sentence(issue.branding.editor_name)} chooses what to highlight"
+
+
+def _site_label(url: str) -> str:
+    parts = urlsplit(url)
+    return (parts.netloc + parts.path).rstrip("/") or url
+
+
 def _project_line(issue: NewsletterIssue, link: ProjectLink) -> str:
     built = issue.built_for(link.project_id) or "Nothing posted for this week yet."
     site = f" {link.post_url or link.site_url}" if (link.post_url or link.site_url) else ""
@@ -119,6 +141,8 @@ def render_text(issue: NewsletterIssue) -> str:
         if link and (link.post_url or link.site_url):
             lines.append(f"   Open it: {link.post_url or link.site_url}")
         lines.append("")
+    lines.append(f"{_selection_line(issue)}: {highlights_page_url(issue)}")
+    lines.append("")
     lines.append("ALL THE OTHER BUILDS THIS WEEK")
     others = issue.other_projects()
     if others:
@@ -133,10 +157,11 @@ def render_text(issue: NewsletterIssue) -> str:
             f"— {issue.quote.author}, {issue.quote.source}"
             + (f" ({issue.quote.url})" if issue.quote.url else ""),
             "",
+            f"Curation and commentary by {branding.editor_name}.",
+            f"Reviewed by {_in_sentence(branding.sender_name)}.",
+            "",
             _course_line(issue),
             f"Class website: {branding.course_site_url}",
-            f"Curation and commentary by {branding.editor_name}.",
-            f"Reviewed by {branding.sender_name}.",
         ]
     )
     return "\n".join(lines).strip() + "\n"
@@ -297,7 +322,16 @@ def render_html(
         f'<p style="margin:0 0 24px 0;{_SECTION}">Highlights</p>'
         f"{_TEXT_CLOSE}"
         f"{highlights}"
-        f"{rule}{_TEXT_OPEN}"
+        + _text_block(
+            '<p style="margin:-16px 0 0 0;">'
+            + _anchor(
+                highlights_page_url(issue),
+                f"{escape(_selection_line(issue))} &rarr;",
+                style=f"{_LABEL}{_UNDERLINED}",
+            )
+            + "</p>"
+        )
+        + f"{rule}{_TEXT_OPEN}"
         f'<p style="margin:0 0 16px 0;{_SECTION}">All the other builds this week</p>'
         f"{other_names}"
         f"{_TEXT_CLOSE}{rule}{_TEXT_OPEN}"
@@ -305,17 +339,19 @@ def render_html(
         f'font-weight:300;color:{_INK};">&ldquo;{escape(issue.quote.text)}&rdquo;</p>'
         f'<p style="margin:0;{_LABEL}">{attribution}</p>'
         f"{_TEXT_CLOSE}{rule}{_TEXT_OPEN}"
+        # Colophon order: who made this issue, then whose course it is and where to find it.
+        f'<p style="margin:0 0 10px 0;{_LABEL}">Curation and commentary by '
+        f"{escape(branding.editor_name)}</p>"
+        f'<p style="margin:0 0 26px 0;{_LABEL}">Reviewed by '
+        f"{escape(_in_sentence(branding.sender_name))}</p>"
         f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(_course_line(issue))}</p>'
-        '<p style="margin:0 0 10px 0;">'
+        '<p style="margin:0;">'
         + _anchor(
             branding.course_site_url,
-            escape(branding.course_site_url),
+            escape(_site_label(branding.course_site_url)),
             style=f"{_LABEL}{_UNDERLINED}",
         )
         + "</p>"
-        f'<p style="margin:0 0 10px 0;{_LABEL}">Curation and commentary by '
-        f"{escape(branding.editor_name)}</p>"
-        f'<p style="margin:0;{_LABEL}">Reviewed by {escape(branding.sender_name)}</p>'
         f"{_TEXT_CLOSE}"
         "</td></tr></table></td></tr></table></body></html>\n"
     )

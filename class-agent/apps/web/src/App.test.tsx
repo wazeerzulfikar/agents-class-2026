@@ -138,6 +138,17 @@ beforeEach(() => {
     },
   });
   vi.mocked(api.getCourseResourceContent).mockImplementation(async (uri) => {
+    if (uri === "course://newsletter-highlights") {
+      return {
+        uri,
+        mediaType: "text/markdown",
+        data: new TextEncoder().encode(
+          "# How The Class Runtime chooses its highlights\n\n" +
+            "**Curated by:** The Course Agent\n\n" +
+            "## The rubric\n\n| Criterion | Weight |\n| --- | --- |\n| **Originality** | 30% |",
+        ),
+      };
+    }
     if (uri === "course://syllabus") {
       return {
         pdfDownloadUrl: "/api/v1/course/resources/asset?uri=course%3A%2F%2Fsyllabus&asset_id=pdf",
@@ -1345,6 +1356,35 @@ describe("Course Agent interface", () => {
     await waitFor(() =>
       expect(api.getCourseResourceContent).toHaveBeenCalledTimes(2),
     );
+  });
+
+  it("opens the newsletter's highlight explainer from the link in every issue", async () => {
+    window.history.replaceState({}, "", "/newsletter/highlights");
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "How The Class Runtime chooses its highlights",
+      }),
+    ).toBeInTheDocument();
+    expect(api.getCourseResourceContent).toHaveBeenCalledWith("course://newsletter-highlights");
+    expect(screen.getByRole("cell", { name: "Originality" })).toBeInTheDocument();
+    expect(screen.getByText("Curated by")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Message" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "About" })).not.toHaveAttribute("aria-current");
+
+    fireEvent.click(screen.getByRole("button", { name: "About" }));
+
+    expect(window.location.pathname).toBe("/about");
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "AI Agents for Cognitive Augmentation",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "About" })).toHaveAttribute("aria-current", "page");
   });
 
   it("opens About from its direct URL and follows browser navigation", async () => {

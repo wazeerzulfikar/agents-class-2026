@@ -26,6 +26,7 @@ from .models import NewsletterIssue, NewsletterSettings
 from .pdf import export_pdf
 from .render import render_html, render_text
 from .schedule import NewsletterScheduleError, load_schedule
+from .score import RUBRIC
 from .service import NewsletterService, NewsletterStateError
 from .store import FileNewsletterStore, NewsletterStoreError
 
@@ -173,20 +174,26 @@ def _print_issue(issue: NewsletterIssue, store: FileNewsletterStore, *, out: Tex
     print("", file=out)
 
 
+_COLUMN = {"originality": "ORIG", "goal_fit": "FIT", "augmentation": "AUG", "execution": "EXEC"}
+
+
 def _print_scores(issue: NewsletterIssue, *, out: TextIO) -> None:
     if not issue.scores:
         return
     featured = set(issue.highlighted_project_ids())
-    print("Scoreboard (goal fit 40% · interest 40% · execution 20%):", file=out)
-    print("  TOTAL  GOAL  INT  EXEC  PROJECT", file=out)
+    weights = " · ".join(
+        f"{criterion.name.lower()} {round(criterion.weight * 100)}%" for criterion in RUBRIC
+    )
+    print(f"Scoreboard ({weights}):", file=out)
+    print("  TOTAL  " + "".join(f"{_COLUMN[c.key]:>5}" for c in RUBRIC) + "  PROJECT", file=out)
     for score in issue.scores:
         marker = "*" if score.project_id in featured else " "
         flag = "" if score.eligible else "  (featured recently)"
-        print(
-            f"{marker} {score.total:5.1f}  {score.goal_fit:>4}  {score.interest:>3}  "
-            f"{score.execution:>4}  {score.project_id}{flag}",
-            file=out,
+        cells = "".join(
+            f"{value if isinstance(value, int) else '-':>5}"
+            for value in (getattr(score, criterion.key) for criterion in RUBRIC)
         )
+        print(f"{marker} {score.total:5.1f}  {cells}  {score.project_id}{flag}", file=out)
         if score.built:
             print(f"           built: {score.built}", file=out)
         if score.rationale:

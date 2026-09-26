@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -21,7 +22,11 @@ from course_server.auth import InMemoryAuthStore, UserAdminService
 from course_server.config import ConfigurationError
 from course_server.mail import InboundMail, OutboundMail, SentMail
 from course_server.newsletter import (
+    MIN_GOAL_FIT,
     PIONEER_QUOTES,
+    RUBRIC,
+    SCORE_SCHEMA,
+    SCORE_WEIGHTS,
     CourseWeek,
     EvidenceLimits,
     FileNewsletterStore,
@@ -34,6 +39,7 @@ from course_server.newsletter import (
     NewsletterCopy,
     NewsletterIssue,
     NewsletterScheduleError,
+    NewsletterScoringError,
     NewsletterService,
     NewsletterSettings,
     NewsletterStateError,
@@ -59,17 +65,22 @@ from course_server.newsletter import (
     learning_goals_from_syllabus,
     load_lecture_notes,
     parse_schedule,
+    parse_score,
     project_label,
     render_html,
     render_text,
+    score_breakdown,
+    select_highlights,
     select_week,
     validate_editorial,
     verify_quote,
 )
 from course_server.newsletter.cli import main as newsletter_main
 from course_server.newsletter.compose import EDITORIAL_MARKER, HIGHLIGHTS_MARKER
+from course_server.newsletter.images import filter_candidates, fragment_shell, is_html_fragment
 from course_server.newsletter.jobs import NewsletterJobRunner
-from course_server.newsletter.score import SCORING_MARKER
+from course_server.newsletter.score import SCORING_MARKER, build_score_system_prompt
+from course_server.newsletter.screenshots import still_png
 from course_server.newsletter.tools import NewsletterTools
 from course_server.student_projects import (
     RepositoryView,
@@ -350,12 +361,19 @@ def editorial_json(
     return json.dumps({"headline": headline, "editorial": editorial, "quote_choice": quote_choice})
 
 
-def score_json(goal_fit: int, interest: int, execution: int, rationale: str = "ok") -> str:
+def score_json(
+    goal_fit: int,
+    originality: int,
+    execution: int,
+    rationale: str = "ok",
+    augmentation: int = 6,
+) -> str:
     return json.dumps(
         {
-            "interest": interest,
+            "originality": originality,
             "execution": execution,
             "goal_fit": goal_fit,
+            "augmentation": augmentation,
             "rationale": rationale,
             "built": "A tidy agent loop.",
             "went_well": "Clear loop.",
@@ -395,6 +413,113 @@ class ScriptedWriter:
     def judge_images(self, *, prompt: str, images: Sequence[bytes]) -> int:
         self.judge_prompts.append(prompt)
         return self.judge_choice
+
+
+def test_rubric_weights_four_criteria_and_old_scores_still_load() -> None:
+    assert [criterion.key for criterion in RUBRIC] == [
+        "originality",
+        "goal_fit",
+        "augmentation",
+        "execution",
+    ]
+    assert SCORE_WEIGHTS == {
+        "originality": 0.30,
+        "goal_fit": 0.25,
+        "augmentation": 0.25,
+        "execution": 0.20,
+    }
+    assert set(cast(list[str], SCORE_SCHEMA["required"])) >= set(SCORE_WEIGHTS)
+
+    score = parse_score(
+        score_json(goal_fit=6, originality=9, execution=5, augmentation=8),
+        project_id="agents2026-ada",
+        eligible=True,
+    )
+    assert (score.originality, score.goal_fit, score.augmentation, score.execution) == (9, 6, 8, 5)
+    assert score.total == round(0.30 * 9 + 0.25 * 6 + 0.25 * 8 + 0.20 * 5, 2)
+    assert score_breakdown(score) == (
+        "originality 9, assignment fit 6, cognitive augmentation 8, execution 5"
+    )
+
+    missing = json.loads(score_json(6, 6, 6))
+    del missing["augmentation"]
+    with pytest.raises(NewsletterScoringError, match="rubric"):
+        parse_score(json.dumps(missing), project_id="agents2026-ada", eligible=True)
+
+    # Issues scored before the rename stored originality as `interest`, with no augmentation.
+    legacy = ProjectScore.model_validate(
+        {"project_id": "agents2026-ada", "interest": 7, "execution": 6, "goal_fit": 8, "total": 7.2}
+    )
+    assert legacy.originality == 7 and legacy.augmentation is None
+    assert "interest" not in legacy.model_dump() and score_breakdown(legacy).endswith(
+        "cognitive augmentation -, execution 6"
+    )
+
+    # Ties on the weighted total go to assignment fit, then originality.
+    tied = [
+        ProjectScore(
+            project_id="agents2026-bea",
+            originality=8,
+            execution=6,
+            goal_fit=6,
+            augmentation=6,
+            total=6.6,
+        ),
+        ProjectScore(
+            project_id="agents2026-cal",
+            originality=6,
+            execution=6,
+            goal_fit=8,
+            augmentation=6,
+            total=6.6,
+        ),
+        ProjectScore(
+            project_id="agents2026-dee",
+            originality=10,
+            execution=10,
+            goal_fit=4,
+            augmentation=10,
+            total=8.5,
+        ),
+    ]
+    assert select_highlights(tied, count=3) == (
+        "agents2026-cal",
+        "agents2026-bea",
+        "agents2026-dee",
+    )
+
+    prompt = build_score_system_prompt(NewsletterBranding())
+    assert "Score 4 things from 0 to 10" in prompt
+    for criterion in RUBRIC:
+        assert f"- {criterion.key}: {criterion.guidance}" in prompt
+
+
+def test_public_highlights_page_restates_the_rubric_and_selection_rules() -> None:
+    """course://newsletter-highlights is what the email links to; it must match the code."""
+
+    page = (
+        Path(__file__).resolve().parents[2] / "shared/course/newsletter/highlights.md"
+    ).read_text(encoding="utf-8")
+    criterion_line = re.compile(
+        r"^- \*\*(?P<name>[^,*]+), (?P<weight>\d+%)\.\*\* (?P<question>.+)$"
+    )
+    rows = {
+        match["name"]: (match["weight"], match["question"])
+        for match in map(criterion_line.match, page.splitlines())
+        if match
+    }
+    assert rows == {
+        criterion.name: (f"{round(criterion.weight * 100)}%", criterion.question)
+        for criterion in RUBRIC
+    }
+    defaults = NewsletterSettings.from_environment({})
+    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+    assert f"**Highlights per issue:** {defaults.highlight_count}" in page
+    assert f"features the {words[defaults.highlight_count]} that score highest" in page
+    assert f"The {words[defaults.highlight_count]} highest weighted totals" in page
+    assert f"at least {MIN_GOAL_FIT} on assignment fit" in page
+    assert f"either of the last {words[defaults.highlight_cooldown_issues]} issues" in page
+    assert "A tie goes to assignment fit, then to originality." in page
 
 
 def test_compose_writes_only_the_selected_projects_in_order_and_reprompts_once() -> None:
@@ -494,7 +619,7 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
     scores = (
         ProjectScore(
             project_id="agents2026-ada",
-            interest=8,
+            originality=8,
             execution=7,
             goal_fit=9,
             total=8.2,
@@ -503,7 +628,9 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
             struggled="Sparse tests.",
             quotes=("Agents learn best when reality gets a vote.", "My loop ate my homework."),
         ),
-        ProjectScore(project_id="agents2026-grace", interest=5, execution=5, goal_fit=6, total=5.4),
+        ProjectScore(
+            project_id="agents2026-grace", originality=5, execution=5, goal_fit=6, total=5.4
+        ),
     )
     lecture = LectureNotes(
         title="Week 1 slides",
@@ -780,11 +907,11 @@ def sample_issue(*, status: str = "draft") -> NewsletterIssue:
         ),
         scores=(
             ProjectScore(
-                project_id="agents2026-ada", interest=8, execution=7, goal_fit=9, total=8.2
+                project_id="agents2026-ada", originality=8, execution=7, goal_fit=9, total=8.2
             ),
             ProjectScore(
                 project_id="agents2026-grace",
-                interest=5,
+                originality=5,
                 execution=5,
                 goal_fit=6,
                 total=5.4,
@@ -812,10 +939,18 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "THE ASSIGNMENT: Build a minimal agent loop.\n\nThe loop ran." in text
     assert "brief" not in text.casefold() and "scroll" not in text.casefold()
     assert "\n\n— The Course Agent\n\n" in text
-    assert (
-        "Curation and commentary by The Course Agent.\nReviewed by The MAS.S60 teaching team."
-        in text
+    # Colophon: credits first, then the course line, then the class website last.
+    assert text.rstrip().endswith(
+        "Curation and commentary by The Course Agent.\n"
+        "Reviewed by the MAS.S60 teaching team.\n\n"
+        "MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026\n"
+        "Class website: https://cognitive-agents.media.mit.edu"
     )
+    assert (
+        "How the Course Agent chooses what to highlight: "
+        "https://cognitive-agents.media.mit.edu/newsletter/highlights\n\n"
+        "ALL THE OTHER BUILDS THIS WEEK"
+    ) in text
     assert "Open it: https://a.example/week01.html" in text
     assert (
         "ALL THE OTHER BUILDS THIS WEEK\n- Grace: Grace built a tiny tool-calling loop. "
@@ -835,7 +970,18 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "How the week went</p>" in html
     assert "&mdash; The Course Agent</p>" in html
     assert "Curation and commentary by The Course Agent</p>" in html
-    assert "Reviewed by The MAS.S60 teaching team</p>" in html and "Sent by" not in html
+    assert "Reviewed by the MAS.S60 teaching team</p>" in html and "Sent by" not in html
+    footer = html.split("Curation and commentary by", 1)[1]
+    assert (
+        footer.index("Reviewed by")
+        < footer.index("MAS.S60 · AI Agents")
+        < footer.index(">cognitive-agents.media.mit.edu</a>")
+    )
+    assert (
+        '<a href="https://cognitive-agents.media.mit.edu/newsletter/highlights"'
+        in html.split("All the other builds this week")[0].split("Open Ada")[1]
+    )
+    assert "How the Course Agent chooses what to highlight &rarr;</a>" in html
     assert html.count('bgcolor="#000000"') >= 4 and "supported-color-schemes" in html
     assert html.count("The loop ran.</p>") == 1
     assert (
@@ -873,7 +1019,7 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     )
     assert "u + .body" not in html and "gmail-blend" not in html and "<hr" not in html
     segments = html.split(wrapper)
-    assert len(segments) == 6 + len(issue.body.highlights)
+    assert len(segments) == 7 + len(issue.body.highlights)
     for segment in segments[1:]:
         inner = segment.split("</div></div>", 1)[0]
         assert "<img" not in inner and "<div" not in inner
@@ -1011,6 +1157,60 @@ def test_encode_jpeg_downscales_captures_to_email_width() -> None:
     assert encode_jpeg(small.getvalue(), max_width=1200, quality=80).width == 300
 
 
+def test_image_finder_reads_fragments_in_their_shell_and_offers_video_posters() -> None:
+    # A post a site's script inserts into its styled shell (no document, no styles of its own).
+    fragment = (
+        '<h1>shape the world</h1><figure><video controls poster="media/week01/still.png">'
+        '<source src="media/week01/demo.webm"></video></figure>'
+    )
+    assert is_html_fragment(fragment)
+    assert not is_html_fragment("<!doctype html><html><head></head><body><p>x</p></body></html>")
+    assert not is_html_fragment('<link rel="stylesheet" href="style.css"><h1>styled</h1>')
+    assert not is_html_fragment("<style>h1{color:red}</style><h1>styled</h1>")
+    assert not is_html_fragment("plain text, not markup")
+    shell = fragment_shell(fragment, base_url='https://mitmedialab.github.io/agents2026-mo/"x')
+    assert shell.startswith("<!DOCTYPE html><html><head>")
+    assert '<base href="https://mitmedialab.github.io/agents2026-mo/&quot;x">' in shell
+    assert shell.endswith(f"<body>{fragment}</body></html>")
+
+    page = "https://mitmedialab.github.io/agents2026-mo/rooms/week01.html"
+    candidates = filter_candidates(
+        [
+            {
+                "index": 0,
+                "tag": "video",
+                "width": 300,
+                "height": 150,
+                "alt": "demo",
+                "src": "https://mitmedialab.github.io/agents2026-mo/media/week01/demo.webm",
+                "poster": "https://mitmedialab.github.io/agents2026-mo/media/week01/still.png",
+                "visible": True,
+            },
+            # A broken image reports itself invisible and is never captured.
+            {"index": 1, "tag": "img", "width": 900, "height": 600, "src": "x", "visible": False},
+            {"index": 2, "tag": "video", "width": 640, "height": 360, "poster": "data:x"},
+        ],
+        page_url=page,
+    )
+    assert [(c.index, c.poster) for c in candidates] == [
+        (2, ""),
+        (0, "https://mitmedialab.github.io/agents2026-mo/media/week01/still.png"),
+    ]
+
+    buffer = io.BytesIO()
+    Image.new("RGBA", (1440, 960), (10, 20, 30, 128)).save(buffer, format="PNG")
+    png, width, height = still_png(buffer.getvalue(), min_width=280, min_height=140, max_width=1200)
+    assert (width, height) == (1200, 800) and png.startswith(b"\x89PNG")
+    with Image.open(io.BytesIO(png)) as decoded:
+        assert decoded.mode == "RGB"
+    tiny = io.BytesIO()
+    Image.new("RGB", (100, 100)).save(tiny, format="PNG")
+    with pytest.raises(ScreenshotError, match="too small"):
+        still_png(tiny.getvalue(), min_width=280, min_height=140, max_width=1200)
+    with pytest.raises(ScreenshotError, match="decoded"):
+        still_png(b"not an image", min_width=280, min_height=140, max_width=1200)
+
+
 def test_quotes_rotate_by_week_and_skip_quotes_already_sent() -> None:
     assert choose_quote(week_number=1, used_texts=()) == PIONEER_QUOTES[0]
     assert choose_quote(week_number=2, used_texts=()) == PIONEER_QUOTES[1]
@@ -1102,8 +1302,8 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
     writer = ScriptedWriter(
         [copy_json("agents2026-ada", "agents2026-hal-9000")],
         scores={
-            "agents2026-ada": score_json(goal_fit=9, interest=8, execution=7, rationale="Bold."),
-            "agents2026-hal-9000": score_json(goal_fit=7, interest=6, execution=6),
+            "agents2026-ada": score_json(goal_fit=9, originality=8, execution=7, rationale="Bold."),
+            "agents2026-hal-9000": score_json(goal_fit=7, originality=6, execution=6),
         },
     )
     service, store = make_service(tmp_path, writer)

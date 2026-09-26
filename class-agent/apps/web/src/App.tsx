@@ -88,7 +88,7 @@ import {
 } from "react";
 import { mergeNotificationCenterUpdates } from "./notifications.js";
 import { readStartupQuery, urlWithoutStartupQuery } from "./startupQuery.js";
-import { useAboutRoute } from "./aboutRoute.js";
+import { COURSE_DOCUMENTS, useAboutRoute } from "./aboutRoute.js";
 
 const CONNECTION_ERROR = "I couldn’t reach the Course Agent. Please try again.";
 const WELCOME_MESSAGE =
@@ -273,7 +273,7 @@ export default function App() {
   const [pendingUploadCount, setPendingUploadCount] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [aboutOpen, setAboutOpen] = useAboutRoute();
+  const [aboutOpen, setAboutOpen, aboutDocument] = useAboutRoute();
   const [syllabusPdfUrl, setSyllabusPdfUrl] = useState<string | undefined>();
   const [syllabusContent, setSyllabusContent] = useState<string | null>(null);
   const [syllabusError, setSyllabusError] = useState<string | null>(null);
@@ -557,7 +557,8 @@ export default function App() {
     setSyllabusPdfUrl(undefined);
     setSyllabusError(null);
     setSyllabusLoading(true);
-    void getCourseResourceContent("course://syllabus")
+    const route = COURSE_DOCUMENTS[aboutDocument];
+    void getCourseResourceContent(route.uri)
       .then((resource) => {
         if (disposed) return;
         setSyllabusContent(new TextDecoder().decode(resource.data));
@@ -565,7 +566,7 @@ export default function App() {
       })
       .catch(() => {
         if (!disposed) {
-          setSyllabusError("The syllabus could not be loaded. Please try again.");
+          setSyllabusError(route.errorMessage);
         }
       })
       .finally(() => {
@@ -574,7 +575,7 @@ export default function App() {
     return () => {
       disposed = true;
     };
-  }, [aboutOpen]);
+  }, [aboutDocument, aboutOpen]);
 
   useEffect(() => {
     if (isOpening) return;
@@ -958,14 +959,14 @@ export default function App() {
   }
 
   async function toggleAbout(): Promise<void> {
-    if (aboutOpen) {
+    if (aboutOpen && aboutDocument === "syllabus") {
       setAboutOpen(false);
       requestAnimationFrame(() => composerRef.current?.focus());
       return;
     }
     setHistoryOpen(false);
     setMobileView("chat");
-    setAboutOpen(true);
+    setAboutOpen(true, "syllabus");
   }
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
@@ -1487,7 +1488,7 @@ export default function App() {
               </Button>
             ))}
             <Button
-              aria-current={aboutOpen ? "page" : undefined}
+              aria-current={aboutOpen && aboutDocument === "syllabus" ? "page" : undefined}
               className="about-link"
               onClick={() => void toggleAbout()}
             >
@@ -1534,6 +1535,7 @@ export default function App() {
       {aboutOpen ? (
         <SyllabusPage
           content={syllabusContent}
+          loadingMessage={COURSE_DOCUMENTS[aboutDocument].loadingMessage}
           pdfDownloadUrl={syllabusPdfUrl}
           error={syllabusError}
           loading={syllabusLoading}

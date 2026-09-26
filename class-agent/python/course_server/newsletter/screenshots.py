@@ -50,3 +50,25 @@ def encode_jpeg(source: bytes, *, max_width: int, quality: int) -> SiteScreensho
         width=rgb.width,
         height=rgb.height,
     )
+
+
+def still_png(
+    source: bytes, *, min_width: int, min_height: int, max_width: int
+) -> tuple[bytes, int, int]:
+    """Decode a published still (a video poster), flatten it, and return PNG bytes and size."""
+
+    try:
+        with Image.open(io.BytesIO(source)) as image:
+            image.load()
+            rgba = image.convert("RGBA")
+    except (OSError, ValueError, Image.DecompressionBombError) as error:
+        raise ScreenshotError("The still could not be decoded.") from error
+    if rgba.width < min_width or rgba.height < min_height:
+        raise ScreenshotError("The still is too small to feature.")
+    rgb = Image.alpha_composite(Image.new("RGBA", rgba.size, _GROUND_RGBA), rgba).convert("RGB")
+    if rgb.width > max_width:
+        height = max(1, round(rgb.height * max_width / rgb.width))
+        rgb = rgb.resize((max_width, height), Image.Resampling.LANCZOS)
+    buffer = io.BytesIO()
+    rgb.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue(), rgb.width, rgb.height

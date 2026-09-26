@@ -10,6 +10,7 @@ import json
 import re
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
@@ -19,20 +20,93 @@ from .models import CourseWeek, NewsletterBranding, ProjectEvidence, ProjectScor
 if TYPE_CHECKING:
     from .compose import NewsletterWriter
 
+
+@dataclass(frozen=True)
+class RubricCriterion:
+    """One scored dimension: `guidance` instructs the scorer, `question` explains it to students.
+
+    The public page course://newsletter-highlights restates these; a test keeps them in step.
+    """
+
+    key: str
+    name: str
+    weight: float
+    question: str
+    guidance: str
+
+
+# Instructor-set rubric, in display order. Out-of-the-box thinking lives in originality, which
+# absorbed the earlier "interest" criterion; cognitive augmentation is scored on its own because
+# a build can be original and polished while helping no one think better.
+RUBRIC: tuple[RubricCriterion, ...] = (
+    RubricCriterion(
+        key="originality",
+        name="Originality",
+        weight=0.30,
+        question=(
+            "How far outside the box is it? An unexpected idea, subject, or mechanism scores "
+            "higher than the tutorial's default path, and ambition counts."
+        ),
+        guidance=(
+            "how far outside the box the idea and the approach are. Reward an unexpected "
+            "problem, domain, or mechanism, a playful or ambitious take, and surprising "
+            "findings. The tutorial's default example with a new coat of paint scores 4 or "
+            "below."
+        ),
+    ),
+    RubricCriterion(
+        key="goal_fit",
+        name="Assignment fit",
+        weight=0.25,
+        question=("Did it do what this week's assignment asked, rather than something next to it?"),
+        guidance=(
+            "whether the student properly did what this week's assignment asked, not "
+            "something adjacent. Missing the core of the assignment scores 3 or below."
+        ),
+    ),
+    RubricCriterion(
+        key="augmentation",
+        name="Cognitive augmentation",
+        weight=0.25,
+        question=(
+            "How directly does it help a person think, remember, learn, focus, or decide, "
+            "while that person stays in charge?"
+        ),
+        guidance=(
+            "how directly the build helps a person think, remember, learn, focus, decide, or "
+            "create, with that person still in charge. Automating a chore without changing "
+            "how anyone thinks scores low, and a build with no person it helps scores 2 or "
+            "below, however clever."
+        ),
+    ),
+    RubricCriterion(
+        key="execution",
+        name="Execution",
+        weight=0.20,
+        question=(
+            "Does it work, and does the post show it with a demo, a trace, or an honest "
+            "account of what failed?"
+        ),
+        guidance=(
+            "how complete and working the build is and how well the post shows it with a "
+            "demo, a trace, or a write-up. An honest analysis of what failed counts in its "
+            "favor; a bare template, an empty folder, or plans without a build score low."
+        ),
+    ),
+)
+SCORE_WEIGHTS: dict[str, float] = {criterion.key: criterion.weight for criterion in RUBRIC}
+if abs(sum(SCORE_WEIGHTS.values()) - 1.0) > 1e-9:
+    raise RuntimeError("Newsletter rubric weights must sum to 1.")
+
 SCORE_SCHEMA: dict[str, object] = {
     "type": "object",
     "properties": {
-        "interest": {
-            "type": "integer",
-            "description": "0-10: how interesting, original, or ambitious the build is.",
-        },
-        "execution": {
-            "type": "integer",
-            "description": "0-10: how complete, working, and well documented it is.",
-        },
-        "goal_fit": {
-            "type": "integer",
-            "description": "0-10: how properly it follows this week's assignment goal.",
+        **{
+            criterion.key: {
+                "type": "integer",
+                "description": f"0-10: {criterion.question}",
+            }
+            for criterion in RUBRIC
         },
         "rationale": {
             "type": "string",
@@ -73,9 +147,7 @@ SCORE_SCHEMA: dict[str, object] = {
         },
     },
     "required": [
-        "interest",
-        "execution",
-        "goal_fit",
+        *(criterion.key for criterion in RUBRIC),
         "rationale",
         "built",
         "went_well",
@@ -84,8 +156,6 @@ SCORE_SCHEMA: dict[str, object] = {
     ],
     "additionalProperties": False,
 }
-# Instructor-set weights: following the assignment and being interesting matter most.
-SCORE_WEIGHTS: dict[str, float] = {"goal_fit": 0.4, "interest": 0.4, "execution": 0.2}
 # Projects below this goal-fit score are featured only when nothing better exists.
 MIN_GOAL_FIT = 5
 SCORING_MARKER = "You are scoring one student project"
@@ -100,14 +170,9 @@ def build_score_system_prompt(branding: NewsletterBranding) -> str:
         f"{SCORING_MARKER} for {branding.course_code} {branding.course_title} "
         f"({branding.institution}, {branding.course_term}) so course staff can choose which "
         "builds to feature in the weekly newsletter.\n\n"
-        "Score three things from 0 to 10 using only the evidence provided:\n"
-        "- interest: how interesting the idea is and how interesting the result is; reward "
-        "originality, ambition, surprising findings, and honest analysis of failures.\n"
-        "- execution: how complete and working the build is and how well it is documented; "
-        "a bare template, an empty folder, or plans without a build score low.\n"
-        "- goal_fit: whether the student properly did what this week's assignment asked, not "
-        "something adjacent. Missing the core of the assignment scores 3 or below.\n"
-        "Be strict and consistent: 5 is an ordinary complete submission, 8 or more is "
+        f"Score {len(RUBRIC)} things from 0 to 10 using only the evidence provided:\n"
+        + "".join(f"- {criterion.key}: {criterion.guidance}\n" for criterion in RUBRIC)
+        + "Be strict and consistent: 5 is an ordinary complete submission, 8 or more is "
         "exceptional, and evidence-free claims do not count.\n"
         "Also write, in plain language for the class: `built`, one sentence (at most 18 words) "
         "saying what the student built, naming the project if it has a name; `went_well` and "
@@ -221,21 +286,12 @@ def parse_score(raw: str, *, project_id: str, eligible: bool) -> ProjectScore:
     if not isinstance(payload, dict):
         raise NewsletterScoringError(f"{project_id}: the model returned no score object.")
     try:
-        interest = int(payload.get("interest", -1))
-        execution = int(payload.get("execution", -1))
-        goal_fit = int(payload.get("goal_fit", -1))
+        values = {criterion.key: int(payload.get(criterion.key, -1)) for criterion in RUBRIC}
         rationale = str(payload.get("rationale", ""))[:600]
         return ProjectScore(
             project_id=project_id,
-            interest=interest,
-            execution=execution,
-            goal_fit=goal_fit,
-            total=round(
-                SCORE_WEIGHTS["goal_fit"] * goal_fit
-                + SCORE_WEIGHTS["interest"] * interest
-                + SCORE_WEIGHTS["execution"] * execution,
-                2,
-            ),
+            **values,
+            total=round(sum(criterion.weight * values[criterion.key] for criterion in RUBRIC), 2),
             rationale=rationale,
             built=str(payload.get("built", ""))[:300],
             went_well=str(payload.get("went_well", ""))[:400],
@@ -292,10 +348,7 @@ def score_projects(
         except Exception as error:  # a provider failure for one project must not stop the rest
             say(f"  {project.project_id}: not scored ({type(error).__name__})")
             return None
-        say(
-            f"  {project.project_id}: total {score.total:.1f} "
-            f"(goal {score.goal_fit}, interest {score.interest}, execution {score.execution})"
-        )
+        say(f"  {project.project_id}: total {score.total:.1f} ({score_breakdown(score)})")
         return score
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
@@ -304,12 +357,26 @@ def score_projects(
     return tuple(sorted(scored, key=_ranking_key))
 
 
-def _ranking_key(score: ProjectScore) -> tuple[int, float, int, int, str]:
+def score_breakdown(score: ProjectScore) -> str:
+    """Each criterion's score in rubric order, for logs and the instructor scoreboard."""
+
+    return ", ".join(
+        f"{criterion.name.lower()} {_criterion_value(score, criterion.key)}" for criterion in RUBRIC
+    )
+
+
+def _criterion_value(score: ProjectScore, key: str) -> int | str:
+    value = getattr(score, key)
+    return value if isinstance(value, int) else "-"
+
+
+def _ranking_key(score: ProjectScore) -> tuple[int, float, int, int, int, str]:
     return (
         0 if score.goal_fit >= MIN_GOAL_FIT else 1,
         -score.total,
         -score.goal_fit,
-        -score.interest,
+        -score.originality,
+        -(score.augmentation or 0),
         score.project_id,
     )
 

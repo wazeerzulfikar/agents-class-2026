@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
 from course_server.auth.models import AwareDatetime
 from course_server.config import ConfigurationError
@@ -197,9 +197,12 @@ class ProjectScore(NewsletterModel):
     """Rubric scores for one project's week, produced by the model and ranked in code."""
 
     project_id: ProjectId
-    interest: int = Field(ge=0, le=10)
+    # Out-of-the-box thinking; issues scored before the rename stored it as `interest`.
+    originality: int = Field(ge=0, le=10, validation_alias=AliasChoices("originality", "interest"))
     execution: int = Field(ge=0, le=10)
     goal_fit: int = Field(ge=0, le=10)
+    # How directly the build helps a person think; absent from issues scored before it existed.
+    augmentation: int | None = Field(default=None, ge=0, le=10)
     total: float = Field(ge=0, le=10)
     rationale: Annotated[str, StringConstraints(strip_whitespace=True, max_length=600)] = ""
     built: Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)] = ""

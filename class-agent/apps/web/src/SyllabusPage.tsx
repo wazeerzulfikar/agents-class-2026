@@ -175,13 +175,21 @@ export interface SyllabusPageProps {
   content: string | null;
   error: string | null;
   loading: boolean;
+  loadingMessage?: string;
 }
 
-export function SyllabusPage({ content, error, loading, pdfDownloadUrl }: SyllabusPageProps) {
+/** Renders a course Markdown document: the syllabus, or another page such as the newsletter's. */
+export function SyllabusPage({
+  content,
+  error,
+  loading,
+  loadingMessage = "Loading syllabus…",
+  pdfDownloadUrl,
+}: SyllabusPageProps) {
   if (loading) {
     return (
       <main className="syllabus-page">
-        <p className="syllabus-status">Loading syllabus…</p>
+        <p className="syllabus-status">{loadingMessage}</p>
       </main>
     );
   }
@@ -189,7 +197,7 @@ export function SyllabusPage({ content, error, loading, pdfDownloadUrl }: Syllab
     return (
       <main className="syllabus-page">
         <p className="syllabus-status" role="alert">
-          {error ?? "The syllabus is unavailable."}
+          {error ?? "This page is unavailable."}
         </p>
       </main>
     );
