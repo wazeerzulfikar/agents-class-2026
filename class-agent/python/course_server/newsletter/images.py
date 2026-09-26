@@ -108,6 +108,8 @@ class FoundImage:
     kind: ImageKind
     page_url: str
     source_url: str | None = None
+    # The page is a fragment shown inside the site's shell, not a page to send readers to.
+    page_is_fragment: bool = False
 
 
 class ImageJudge(Protocol):
@@ -393,7 +395,7 @@ class PlaywrightImageFinder:
                             page = opened
                         found = self._capture_best(page, page_url, week=week, context=context)
                         if found is not None:
-                            return found
+                            return replace(found, page_is_fragment=page_url in fragments)
                     # A fragment on its own is unstyled; the site root is what visitors see.
                     fallback_url = site_url if scan[0] in fragments else scan[0]
                     fallback = self._try_open(browser_context, fallback_url)

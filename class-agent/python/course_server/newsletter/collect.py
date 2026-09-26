@@ -16,7 +16,13 @@ from course_server.student_projects import (
     StudentProjectProviderError,
 )
 
-from .images import discover_week_anchor, discover_week_pages, static_anchors
+from .images import (
+    discover_week_anchor,
+    discover_week_pages,
+    is_html_fragment,
+    static_anchors,
+    static_html,
+)
 from .models import CommitSummary, CourseWeek, ProjectDocument, ProjectEvidence
 
 WEEKLY_BUILDS_DIRECTORY = "weekly_builds"
@@ -37,6 +43,17 @@ class WeekPageFinder(Protocol):
     """Finds the student's post for the week from their site root, or None."""
 
     def __call__(self, site_url: str, week: CourseWeek) -> str | None: ...
+
+
+class FragmentCheck(Protocol):
+    """Whether a post is an HTML fragment that only renders inside its site's shell."""
+
+    def __call__(self, url: str) -> bool: ...
+
+
+def week_page_is_fragment(url: str) -> bool:
+    html = static_html(url)
+    return html is not None and is_html_fragment(html)
 
 
 def find_week_page(site_url: str, week: CourseWeek) -> str | None:
@@ -113,6 +130,7 @@ class WeeklyEvidenceCollector:
         repository_prefix: str,
         read_site: SiteReader | None = None,
         find_week_page: WeekPageFinder | None = None,
+        is_fragment: FragmentCheck | None = None,
         limits: EvidenceLimits | None = None,
         log: Callable[[str], None] | None = None,
     ) -> None:
@@ -120,6 +138,7 @@ class WeeklyEvidenceCollector:
         self._repository_prefix = repository_prefix
         self._read_site = read_site
         self._find_week_page = find_week_page
+        self._is_fragment = is_fragment
         self._limits = limits or EvidenceLimits()
         self._log = log or (lambda message: None)
 
@@ -164,6 +183,7 @@ class WeeklyEvidenceCollector:
         commits, commit_count = self._read_commits(project.id, week, notes)
         site_text = self._read_site_text(project, notes)
         week_page_url, week_page_text = self._read_week_page(project, week, notes)
+        week_page_fragment = self._fragment(project, week_page_url, notes)
         self._log(
             f"  {project.id}: {week_file_count} week files, {len(documents)} documents, "
             f"{commit_count} commits in window"
@@ -180,6 +200,7 @@ class WeeklyEvidenceCollector:
             site_text=site_text,
             week_page_url=week_page_url,
             week_page_text=week_page_text,
+            week_page_fragment=week_page_fragment,
             notes=tuple(notes),
         )
 
@@ -258,6 +279,20 @@ class WeeklyEvidenceCollector:
             return page_url, None
         compacted, _ = compact_text(text, limit=self._limits.max_week_page_chars)
         return page_url, compacted or None
+
+    def _fragment(self, project: StudentProject, page_url: str | None, notes: list[str]) -> bool:
+        if self._is_fragment is None or page_url is None or project.site_url is None:
+            return False
+        if page_url.split("#", 1)[0].rstrip("/") == project.site_url.rstrip("/"):
+            return False
+        try:
+            fragment = self._is_fragment(page_url)
+        except Exception as error:  # the flag only redirects links; failure keeps the post link
+            notes.append(f"week page type unknown: {type(error).__name__}")
+            return False
+        if fragment:
+            notes.append("the week's post is a fragment shown inside the site; links open the site")
+        return fragment
 
     def _read_site_text(self, project: StudentProject, notes: list[str]) -> str | None:
         if self._read_site is None or project.site_url is None:

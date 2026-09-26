@@ -81,6 +81,7 @@ from course_server.newsletter.images import filter_candidates, fragment_shell, i
 from course_server.newsletter.jobs import NewsletterJobRunner
 from course_server.newsletter.score import SCORING_MARKER, build_score_system_prompt
 from course_server.newsletter.screenshots import still_png
+from course_server.newsletter.service import adopt_browser_pages
 from course_server.newsletter.tools import NewsletterTools
 from course_server.student_projects import (
     RepositoryView,
@@ -520,6 +521,50 @@ def test_public_highlights_page_restates_the_rubric_and_selection_rules() -> Non
     assert f"at least {MIN_GOAL_FIT} on assignment fit" in page
     assert f"either of the last {words[defaults.highlight_cooldown_issues]} issues" in page
     assert "A tie goes to assignment fit, then to originality." in page
+
+
+def test_links_send_readers_to_pages_that_render_on_their_own() -> None:
+    site = "https://mitmedialab.github.io/agents2026-mo/"
+    base = ProjectEvidence(
+        project_id="agents2026-mo",
+        label="Mo",
+        site_url=site,
+        week_file_count=1,
+        site_file_count=3,
+        commit_count=1,
+    )
+    post = base.model_copy(update={"week_page_url": f"{site}week01.html"})
+    fragment = base.model_copy(
+        update={"week_page_url": f"{site}rooms/week01.html", "week_page_fragment": True}
+    )
+    assert base.visitor_url == site and post.visitor_url == f"{site}week01.html"
+    assert fragment.visitor_url == site
+
+    # The collector flags a fragment post and still reads its text for scoring.
+    collector = WeeklyEvidenceCollector(
+        fake_catalog(),
+        repository_prefix="agents2026-",
+        read_site=read_site,
+        find_week_page=find_week_page_for_tests,
+        is_fragment=lambda url: url.endswith("week01.html"),
+        limits=EvidenceLimits(workers=1),
+    )
+    evidence = {item.label: item for item in collector.collect(weeks()[0])}
+    ada, grace = evidence["Ada"], evidence["Grace"]
+    assert ada.week_page_fragment and ada.week_page_text is not None
+    assert ada.visitor_url == ada.site_url
+    assert "links open the site" in " ".join(ada.notes)
+    # A section of the root page is never a fragment.
+    assert not grace.week_page_fragment and grace.visitor_url == grace.week_page_url
+
+    # A post only the browser reached becomes the link, never the root or another site.
+    browser_page = f"{site}?view=week01"
+    assert adopt_browser_pages([base], {"agents2026-mo": browser_page})[0].week_page_url == (
+        browser_page
+    )
+    assert adopt_browser_pages([post], {"agents2026-mo": browser_page})[0] == post
+    assert adopt_browser_pages([base], {"agents2026-mo": site})[0] == base
+    assert adopt_browser_pages([base], {"agents2026-mo": "https://elsewhere.example/w1"})[0] == base
 
 
 def test_compose_writes_only_the_selected_projects_in_order_and_reprompts_once() -> None:
@@ -1258,6 +1303,7 @@ class RecordingMailAdapter:
 class FakeImageFinder:
     calls: list[tuple[str, int, str]] = field(default_factory=list)
     fail_for: set[str] = field(default_factory=set)
+    fragment_for: set[str] = field(default_factory=set)
 
     def find(self, *, site_url: str, week: CourseWeek, context: str) -> FoundImage | None:
         self.calls.append((site_url, week.number, context))
@@ -1270,11 +1316,16 @@ class FakeImageFinder:
             kind="post_image",
             page_url=f"{site_url}week01.html",
             source_url=f"{site_url}assets/hero.webp",
+            page_is_fragment=site_url in self.fragment_for,
         )
 
 
 def make_service(
-    tmp_path: Path, writer: ScriptedWriter, *, cooldown: int = 2
+    tmp_path: Path,
+    writer: ScriptedWriter,
+    *,
+    cooldown: int = 2,
+    image_finder: FakeImageFinder | None = None,
 ) -> tuple[NewsletterService, FileNewsletterStore]:
     store = FileNewsletterStore(tmp_path / "newsletter")
     settings = NewsletterSettings(highlight_count=2, highlight_cooldown_issues=cooldown)
@@ -1289,13 +1340,34 @@ def make_service(
             limits=EvidenceLimits(workers=1),
         ),
         writer=writer,
-        image_finder=FakeImageFinder(),
+        image_finder=image_finder or FakeImageFinder(),
         link_checker=None,
         lecture_loader=lambda week: None,
         model_id="test-model",
         clock=lambda: datetime(2026, 9, 22, 15, 0, tzinfo=UTC),
     )
     return service, store
+
+
+def test_a_fragment_post_found_by_the_browser_never_becomes_the_link(tmp_path: Path) -> None:
+    writer = ScriptedWriter(
+        [copy_json("agents2026-ada", "agents2026-hal-9000")],
+        scores={
+            "agents2026-ada": score_json(goal_fit=9, originality=8, execution=7),
+            "agents2026-hal-9000": score_json(goal_fit=7, originality=6, execution=6),
+        },
+    )
+    ada_site = "https://mitmedialab.github.io/agents2026-ada/"
+    service, _ = make_service(
+        tmp_path, writer, image_finder=FakeImageFinder(fragment_for={ada_site})
+    )
+
+    issue = service.draft(as_of=date(2026, 9, 22))
+
+    link = issue.link_for("agents2026-ada")
+    assert link is not None and link.post_url is None
+    assert issue.open_url("agents2026-ada") == ada_site
+    assert issue.images[0].page_url == f"{ada_site}week01.html"  # still where the image came from
 
 
 def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path: Path) -> None:
@@ -1331,6 +1403,10 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
     assert issue.images[0].source_url == (
         "https://mitmedialab.github.io/agents2026-ada/assets/hero.webp"
     )
+    # No served link named the week, but the browser reached Ada's post: that is her link.
+    ada_link = issue.link_for("agents2026-ada")
+    assert ada_link is not None
+    assert ada_link.post_url == "https://mitmedialab.github.io/agents2026-ada/week01.html"
     assert (tmp_path / "newsletter/issues/2026-week01/agents2026-ada.jpg").read_bytes() == (
         b"\xff\xd8jpeg"
     )
@@ -1530,7 +1606,9 @@ def test_cli_lists_shows_and_refuses_to_send_without_recipients_or_mail(tmp_path
     err = io.StringIO()
     assert newsletter_main(["pdf", "2026-week09"], environment=environment, out=out, err=err) == 2
     out = io.StringIO()
-    assert newsletter_main(["pdf", "2026-week01"], environment=environment, out=out, err=err) == 0
+    err = io.StringIO()
+    exported = newsletter_main(["pdf", "2026-week01"], environment=environment, out=out, err=err)
+    assert exported == 0, err.getvalue()
     pdf_path = Path(out.getvalue().strip())
     assert pdf_path.name == "2026-week01.pdf" and pdf_path.read_bytes().startswith(b"%PDF")
     err = io.StringIO()

@@ -46,8 +46,11 @@ Every issue follows the same skimmable shape:
    checked to resolve before it is accepted.
 2. Four highlights (configurable). Each one shows an image from the student's own post, names
    the student, and gives a headline plus two sentences: what the build is and what makes it
-   interesting, then specifically how it does what the assignment asked. A link opens the site.
-   After the last highlight, one line links to the public explainer on the course site,
+   interesting, then specifically how it does what the assignment asked. A link opens the
+   student's post for the week. Links always go somewhere that renders on its own: a post that is
+   only an HTML fragment shown inside the site's shell links to the site instead, and when only
+   the browser can find the post (a script-built menu), the highlight links to the post page the
+   image finder reached. After the last highlight, one line links to the public explainer on the course site,
    `https://cognitive-agents.media.mit.edu/newsletter/highlights` (see below).
 3. Every other student who posted work that week, with one sentence on what they built and a
    link to their site. Students with nothing beyond the starter template are left off the list.

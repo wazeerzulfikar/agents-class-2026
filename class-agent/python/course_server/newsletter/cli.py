@@ -19,7 +19,7 @@ from course_server.postgres.auth_store import PostgresAuthStore, create_auth_poo
 from course_server.student_projects import GitHubStudentProjectCatalog
 from course_server.web_search import fetch_public_webpage
 
-from .collect import WeeklyEvidenceCollector, find_week_page
+from .collect import WeeklyEvidenceCollector, find_week_page, week_page_is_fragment
 from .compose import NewsletterCompositionError, OpenAINewsletterWriter
 from .images import PlaywrightImageFinder
 from .models import NewsletterIssue, NewsletterSettings
@@ -121,6 +121,7 @@ def _drafting_service(values: Mapping[str, str], *, log: TextIO) -> NewsletterSe
         repository_prefix=agent_settings.github_repository_prefix,
         read_site=fetch_public_webpage,
         find_week_page=find_week_page,
+        is_fragment=week_page_is_fragment,
         log=lambda message: print(message, file=log),
     )
     writer = OpenAINewsletterWriter(
@@ -193,7 +194,7 @@ def _print_scores(issue: NewsletterIssue, *, out: TextIO) -> None:
             f"{value if isinstance(value, int) else '-':>5}"
             for value in (getattr(score, criterion.key) for criterion in RUBRIC)
         )
-        print(f"{marker} {score.total:5.1f}  {cells}  {score.project_id}{flag}", file=out)
+        print(f"{marker} {score.total:5.2f}  {cells}  {score.project_id}{flag}", file=out)
         if score.built:
             print(f"           built: {score.built}", file=out)
         if score.rationale:

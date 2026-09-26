@@ -328,7 +328,7 @@ def describe_project(project: ProjectEvidence, *, status: str) -> str:
         lines.append(f"document {document.path}{suffix}:")
         lines.append(document.text)
     if project.week_page_url:
-        lines.append(f"this week's post on the site: {project.week_page_url}")
+        lines.append(f"this week's post on the site: {project.visitor_url}")
     if project.week_page_text:
         lines.append("text of this week's post:")
         lines.append(project.week_page_text)
@@ -396,7 +396,7 @@ def build_editorial_user_prompt(
         score = scored.get(project.project_id)
         if score is None:
             continue
-        link = project.week_page_url or project.site_url
+        link = project.visitor_url
         site = f" / site: {link}" if link else ""
         sections.append(
             f"- Submission {index}: built: {score.built or 'unclear'} / "
@@ -667,7 +667,7 @@ def compose_editorial(
             project_urls=[
                 url
                 for project in digest.projects
-                for url in (project.site_url, project.week_page_url)
+                for url in (project.site_url, project.visitor_url)
                 if url is not None
             ],
             link_checker=link_checker,

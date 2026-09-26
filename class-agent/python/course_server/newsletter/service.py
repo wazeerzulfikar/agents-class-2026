@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -66,6 +67,38 @@ def normalize_recipients(values: Sequence[str]) -> tuple[str, ...]:
         return tuple(str(item) for item in _Recipients(addresses=tuple(ordered)).addresses)
     except ValidationError as error:
         raise NewsletterStateError("One or more recipient addresses are invalid.") from error
+
+
+def adopt_browser_pages(
+    evidence: Sequence[ProjectEvidence], pages: Mapping[str, str]
+) -> tuple[ProjectEvidence, ...]:
+    """A highlight's week post that only the browser found (a script-built site) becomes its link.
+
+    Static discovery reads served HTML, so it misses links a site's script renders. The image
+    finder opens the site in a browser; the post page it captured from is the better link.
+    """
+
+    adopted: list[ProjectEvidence] = []
+    for item in evidence:
+        page = pages.get(item.project_id)
+        if (
+            item.week_page_url is None
+            and page is not None
+            and item.site_url is not None
+            and _is_site_subpage(page, item.site_url)
+        ):
+            item = item.model_copy(update={"week_page_url": page})
+        adopted.append(item)
+    return tuple(adopted)
+
+
+def _is_site_subpage(page: str, site_url: str) -> bool:
+    page_parts, site_parts = urlsplit(page), urlsplit(site_url)
+    return (
+        (page_parts.scheme, page_parts.netloc) == (site_parts.scheme, site_parts.netloc)
+        and page_parts.path.startswith(site_parts.path.rstrip("/"))
+        and page.rstrip("/") != site_url.rstrip("/")
+    )
 
 
 class NewsletterService:
@@ -144,7 +177,9 @@ class NewsletterService:
         if not selected:
             raise NewsletterCompositionError("No eligible project could be scored this week.")
         self._log("Selected: " + ", ".join(selected))
-        images = self._find_images(issue_id, selected, evidence, week, scores)
+        images, browser_pages = self._find_images(issue_id, selected, evidence, week, scores)
+        evidence = adopt_browser_pages(evidence, browser_pages)
+        digest = digest.model_copy(update={"projects": evidence})
         lecture = self._lecture_loader(week)
         self._log(
             f"Lecture notes: {lecture.title} ({len(lecture.slides_text)} chars)"
@@ -189,7 +224,8 @@ class NewsletterService:
                     project_id=item.project_id,
                     label=item.label,
                     site_url=item.site_url,
-                    post_url=item.week_page_url,
+                    # A fragment post only renders inside the site, so readers go to the site.
+                    post_url=None if item.week_page_fragment else item.week_page_url,
                     posted=item.active,
                 )
                 for item in evidence
@@ -259,13 +295,16 @@ class NewsletterService:
         evidence: Sequence[ProjectEvidence],
         week: CourseWeek,
         scores: Sequence[ProjectScore],
-    ) -> tuple[HighlightImage, ...]:
+    ) -> tuple[tuple[HighlightImage, ...], dict[str, str]]:
+        """Each highlight's image, plus the week posts only the browser could reach."""
+
         self._store.clear_images(issue_id)
         if self._image_finder is None:
-            return ()
+            return (), {}
         projects = {item.project_id: item for item in evidence}
         rationale = {score.project_id: score.rationale for score in scores}
         images: list[HighlightImage] = []
+        browser_pages: dict[str, str] = {}
         for project_id in selected:
             project = projects.get(project_id)
             if project is None or project.site_url is None:
@@ -305,7 +344,9 @@ class NewsletterService:
                     page_url=found.page_url,
                 )
             )
-        return tuple(images)
+            if found.kind == "post_image" and not found.page_is_fragment:
+                browser_pages[project_id] = found.page_url
+        return tuple(images), browser_pages
 
     def load(self, issue_id: str) -> NewsletterIssue:
         issue = self._store.load(issue_id)

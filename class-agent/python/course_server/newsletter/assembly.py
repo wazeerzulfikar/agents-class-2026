@@ -10,7 +10,7 @@ from course_server.config import AgentSettings, ConfigurationError
 from course_server.student_projects import GitHubStudentProjectCatalog
 from course_server.web_search import fetch_public_webpage
 
-from .collect import WeeklyEvidenceCollector, find_week_page
+from .collect import WeeklyEvidenceCollector, find_week_page, week_page_is_fragment
 from .compose import OpenAINewsletterWriter
 from .images import PlaywrightImageFinder
 from .jobs import NewsletterJobRunner
@@ -69,6 +69,7 @@ def drafting_service_factory(
                 repository_prefix=agent_settings.github_repository_prefix,
                 read_site=fetch_public_webpage,
                 find_week_page=find_week_page,
+                is_fragment=week_page_is_fragment,
                 log=log,
             ),
             writer=writer,

@@ -149,7 +149,17 @@ class ProjectEvidence(NewsletterModel):
     # The student's post for this week on their site, when a link naming the week exists.
     week_page_url: str | None = None
     week_page_text: str | None = None
+    # The post is an HTML fragment that only renders inside the site's own shell.
+    week_page_fragment: bool = False
     notes: tuple[str, ...] = ()
+
+    @property
+    def visitor_url(self) -> str | None:
+        """Where a reader should land: the week's post, unless it only renders inside the site."""
+
+        if self.week_page_url is not None and not self.week_page_fragment:
+            return self.week_page_url
+        return self.site_url
 
     @property
     def active(self) -> bool:
