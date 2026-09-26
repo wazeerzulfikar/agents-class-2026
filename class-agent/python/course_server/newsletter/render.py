@@ -32,20 +32,30 @@ _SANS = "'Helvetica Neue',Helvetica,Arial,sans-serif"
 # Section labels and metadata: the body face in sentence case, small and medium-weight.
 _LABEL = f"font-family:{_SANS};font-size:14px;line-height:1.4;font-weight:500;color:{_MUTED};"
 _SECTION = f"font-family:{_SANS};font-size:15px;line-height:1.4;font-weight:600;color:{_INK};"
+# Link underlines sit inside the text blend below, where a client that recolors borders and one
+# that does not produce mirror-image results; a mid grey looks the same either way.
+_LINK_LINE = "#7d7d78"
 _UNDERLINED = (
-    f"color:{_INK};text-decoration:none;border-bottom:1px solid {_BORDER};padding-bottom:3px;"
+    f"color:{_INK};text-decoration:none;border-bottom:1px solid {_LINK_LINE};padding-bottom:3px;"
 )
 
-# Gmail's apps recolor dark emails in dark mode: text drops to grey or black while the gradient
-# ground above stays black. Gmail alone inserts <u></u> before the body, so these `u + .body`
-# rules reach only Gmail. The screen/difference pair undoes its text transform (Rémi
-# Parmentier's technique); images stay outside the pair so they are not inverted.
-_GMAIL_TEXT_STYLE = (
-    "u + .body .gmail-blend-screen{background:#000;mix-blend-mode:screen;}"
-    "u + .body .gmail-blend-difference{background:#000;mix-blend-mode:difference;}"
+# The Gmail apps recolor dark emails in dark mode: plain backgrounds turn light and light text
+# turns grey, while gradient backgrounds are left alone. Every run of text therefore sits inside
+# a screen/difference blend pair (Rémi Parmentier's technique). It cancels Gmail's recoloring
+# and composites to the original pixels in every other client. The styles must be inline: the
+# Gmail iPhone app ignored the same rules when they came from a stylesheet. Images and rules
+# stay outside the pair, because a difference blend would invert them.
+_TEXT_OPEN = (
+    '<div style="background:#000;mix-blend-mode:screen;">'
+    '<div style="background:#000;mix-blend-mode:difference;">'
 )
-_GMAIL_TEXT_OPEN = '<div class="gmail-blend-screen"><div class="gmail-blend-difference">'
-_GMAIL_TEXT_CLOSE = "</div></div>"
+_TEXT_CLOSE = "</div></div>"
+# Section rules are painted as gradients, which Gmail's dark mode leaves alone.
+_SECTION_RULE = (
+    '<div style="margin:36px 0;height:1px;line-height:1px;font-size:1px;'
+    f"mso-line-height-rule:exactly;background-color:{_BORDER};"
+    f'background-image:linear-gradient({_BORDER},{_BORDER});">&nbsp;</div>'
+)
 
 ImageSource = Callable[[HighlightImage], str]
 
@@ -53,7 +63,7 @@ ImageSource = Callable[[HighlightImage], str]
 def _text_block(inner: str) -> str:
     """Wrap a run of text-only markup so Gmail's dark mode cannot dim it."""
 
-    return f"{_GMAIL_TEXT_OPEN}{inner}{_GMAIL_TEXT_CLOSE}"
+    return f"{_TEXT_OPEN}{inner}{_TEXT_CLOSE}"
 
 
 def _short_date(value: date) -> str:
@@ -236,7 +246,7 @@ def render_html(
     attribution = f"&mdash; {escape(issue.quote.author)}, {escape(issue.quote.source)}"
     if issue.quote.url:
         attribution = _anchor(issue.quote.url, attribution, style=f"{_LABEL}text-decoration:none;")
-    rule = f'<hr style="border:0;border-top:1px solid {_BORDER};margin:36px 0;">'
+    rule = _SECTION_RULE
     return (
         "<!DOCTYPE html>\n"
         '<html lang="en"><head><meta charset="utf-8">'
@@ -246,9 +256,9 @@ def render_html(
         # Mail clients that honor a stylesheet get an explicit dark scheme; the inline
         # bgcolor attributes below carry the ground for the ones that strip <style>.
         f"<style>:root{{color-scheme:dark;}}body,table,td{{background-color:{_GROUND};}}"
-        f"a{{color:{_INK};}}{_GMAIL_TEXT_STYLE}</style>"
+        f"a{{color:{_INK};}}</style>"
         f"<title>{escape(issue.subject)}</title></head>"
-        f'<body class="body" bgcolor="{_GROUND}" style="margin:0;padding:0;'
+        f'<body bgcolor="{_GROUND}" style="margin:0;padding:0;'
         f'background-color:{_GROUND};color:{_INK};">'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
         f'bgcolor="{_GROUND}" style="background-color:{_GROUND};"><tr>'
@@ -267,7 +277,7 @@ def render_html(
             if logo_src
             else ""
         )
-        + _GMAIL_TEXT_OPEN
+        + _TEXT_OPEN
         + (
             f'<p style="margin:0 0 28px 0;{_LABEL}">Issue {issue.week.number:02d}</p>'
             if logo_src
@@ -283,19 +293,18 @@ def render_html(
         f'<p style="margin:0 0 12px 0;{_SECTION}">How the week went</p>'
         f"{editorial}"
         f'<p style="margin:-6px 0 0 0;{_LABEL}">&mdash; {escape(branding.editor_name)}</p>'
-        f"{rule}"
+        f"{_TEXT_CLOSE}{rule}{_TEXT_OPEN}"
         f'<p style="margin:0 0 24px 0;{_SECTION}">Highlights</p>'
-        f"{_GMAIL_TEXT_CLOSE}"
+        f"{_TEXT_CLOSE}"
         f"{highlights}"
-        f"{_GMAIL_TEXT_OPEN}"
-        f"{rule}"
+        f"{rule}{_TEXT_OPEN}"
         f'<p style="margin:0 0 16px 0;{_SECTION}">All the other builds this week</p>'
         f"{other_names}"
-        f"{rule}"
+        f"{_TEXT_CLOSE}{rule}{_TEXT_OPEN}"
         f'<p style="margin:0 0 12px 0;font-family:{_SANS};font-size:21px;line-height:1.4;'
         f'font-weight:300;color:{_INK};">&ldquo;{escape(issue.quote.text)}&rdquo;</p>'
         f'<p style="margin:0;{_LABEL}">{attribution}</p>'
-        f"{rule}"
+        f"{_TEXT_CLOSE}{rule}{_TEXT_OPEN}"
         f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(_course_line(issue))}</p>'
         '<p style="margin:0 0 10px 0;">'
         + _anchor(
@@ -307,6 +316,6 @@ def render_html(
         f'<p style="margin:0 0 10px 0;{_LABEL}">Curation and commentary by '
         f"{escape(branding.editor_name)}</p>"
         f'<p style="margin:0;{_LABEL}">Reviewed by {escape(branding.sender_name)}</p>'
-        f"{_GMAIL_TEXT_CLOSE}"
+        f"{_TEXT_CLOSE}"
         "</td></tr></table></td></tr></table></body></html>\n"
     )
