@@ -865,6 +865,12 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "fonts.googleapis.com" not in html
     # Secondary text is near-white: the site's faint grey never reaches the email.
     assert "#8b8b86" not in html and "#c9c9c4" not in html and "#f0f0ec" in html
+    # Gmail-only blend wrappers keep text light under its dark mode; images stay outside them.
+    assert 'class="body"' in html and "u + .body .gmail-blend-difference{" in html
+    segments = html.split('<div class="gmail-blend-screen"><div class="gmail-blend-difference">')
+    assert len(segments) == 3 + len(issue.body.highlights)
+    for segment in segments[1:]:
+        assert "<img" not in segment.split("</div></div>", 1)[0]
     assert "\u2019" not in html and "\u201c" not in html
 
 

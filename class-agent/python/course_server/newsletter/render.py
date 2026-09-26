@@ -36,7 +36,24 @@ _UNDERLINED = (
     f"color:{_INK};text-decoration:none;border-bottom:1px solid {_BORDER};padding-bottom:3px;"
 )
 
+# Gmail's apps recolor dark emails in dark mode: text drops to grey or black while the gradient
+# ground above stays black. Gmail alone inserts <u></u> before the body, so these `u + .body`
+# rules reach only Gmail. The screen/difference pair undoes its text transform (Rémi
+# Parmentier's technique); images stay outside the pair so they are not inverted.
+_GMAIL_TEXT_STYLE = (
+    "u + .body .gmail-blend-screen{background:#000;mix-blend-mode:screen;}"
+    "u + .body .gmail-blend-difference{background:#000;mix-blend-mode:difference;}"
+)
+_GMAIL_TEXT_OPEN = '<div class="gmail-blend-screen"><div class="gmail-blend-difference">'
+_GMAIL_TEXT_CLOSE = "</div></div>"
+
 ImageSource = Callable[[HighlightImage], str]
+
+
+def _text_block(inner: str) -> str:
+    """Wrap a run of text-only markup so Gmail's dark mode cannot dim it."""
+
+    return f"{_GMAIL_TEXT_OPEN}{inner}{_GMAIL_TEXT_CLOSE}"
 
 
 def _short_date(value: date) -> str:
@@ -167,15 +184,15 @@ def _highlight_html(issue: NewsletterIssue, index: int, *, image_src: ImageSourc
         if site_url
         else ""
     )
-    return (
-        f'<div style="margin:0 0 48px 0;">{figure}'
+    text = _text_block(
         f'<p style="margin:0 0 8px 0;{_LABEL}">{index:02d} &middot; {label}</p>'
         f'<h2 style="margin:0 0 10px 0;font-family:{_SANS};font-size:24px;line-height:1.2;'
         f'font-weight:500;color:{_INK};">{escape(highlight.headline)}</h2>'
         f'<p style="margin:0;font-family:{_SANS};font-size:16px;line-height:1.55;'
         f'color:{_INK_SOFT};">{escape(highlight.description)}</p>'
-        f"{open_link}</div>"
+        f"{open_link}"
     )
+    return f'<div style="margin:0 0 48px 0;">{figure}{text}</div>'
 
 
 def render_html(
@@ -229,10 +246,10 @@ def render_html(
         # Mail clients that honor a stylesheet get an explicit dark scheme; the inline
         # bgcolor attributes below carry the ground for the ones that strip <style>.
         f"<style>:root{{color-scheme:dark;}}body,table,td{{background-color:{_GROUND};}}"
-        f"a{{color:{_INK};}}</style>"
+        f"a{{color:{_INK};}}{_GMAIL_TEXT_STYLE}</style>"
         f"<title>{escape(issue.subject)}</title></head>"
-        f'<body bgcolor="{_GROUND}" style="margin:0;padding:0;background-color:{_GROUND};'
-        f'color:{_INK};">'
+        f'<body class="body" bgcolor="{_GROUND}" style="margin:0;padding:0;'
+        f'background-color:{_GROUND};color:{_INK};">'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
         f'bgcolor="{_GROUND}" style="background-color:{_GROUND};"><tr>'
         # The flat gradient is deliberate: Gmail's app-side dark mode inverts plain background
@@ -247,6 +264,11 @@ def render_html(
             f'<img src="{escape(logo_src, quote=True)}" width="600" '
             f'alt="{escape(branding.newsletter_name)}" style="display:block;width:100%;'
             'max-width:600px;height:auto;margin:0 0 22px 0;">'
+            if logo_src
+            else ""
+        )
+        + _GMAIL_TEXT_OPEN
+        + (
             f'<p style="margin:0 0 28px 0;{_LABEL}">Issue {issue.week.number:02d}</p>'
             if logo_src
             else f'<p style="margin:0 0 28px 0;{_LABEL}">{escape(branding.newsletter_name)} '
@@ -263,7 +285,9 @@ def render_html(
         f'<p style="margin:-6px 0 0 0;{_LABEL}">&mdash; {escape(branding.editor_name)}</p>'
         f"{rule}"
         f'<p style="margin:0 0 24px 0;{_SECTION}">Highlights</p>'
+        f"{_GMAIL_TEXT_CLOSE}"
         f"{highlights}"
+        f"{_GMAIL_TEXT_OPEN}"
         f"{rule}"
         f'<p style="margin:0 0 16px 0;{_SECTION}">All the other builds this week</p>'
         f"{other_names}"
@@ -283,5 +307,6 @@ def render_html(
         f'<p style="margin:0 0 10px 0;{_LABEL}">Curation and commentary by '
         f"{escape(branding.editor_name)}</p>"
         f'<p style="margin:0;{_LABEL}">Reviewed by {escape(branding.sender_name)}</p>'
+        f"{_GMAIL_TEXT_CLOSE}"
         "</td></tr></table></td></tr></table></body></html>\n"
     )

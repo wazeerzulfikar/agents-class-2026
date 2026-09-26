@@ -64,6 +64,14 @@ section labels ("The assignment", "How the week went") set small, sentence-case 
 weight. Secondary text is near-white rather than the site's muted grey, which reads as a
 watermark in an inbox; levels are separated by size and weight instead of by dimming.
 
+The Gmail apps recolor dark emails when the phone is in dark mode: plain backgrounds are
+lightened and light text is darkened. The renderer counters both. The ground is painted with a
+flat `linear-gradient`, which Gmail leaves alone, and every run of text sits inside a pair of
+`mix-blend-mode` wrappers (`screen` around `difference`) that undo Gmail's text transform. The
+wrappers are styled only through `u + .body` selectors, which match nothing outside Gmail
+because only Gmail inserts a `<u>` before the body, and images stay outside the wrappers so
+they are never inverted. Apple Mail and Gmail on the web render the colors as sent.
+
 ## How highlights are chosen
 
 Every active project is scored, one model call each, against a fixed rubric from its bounded
