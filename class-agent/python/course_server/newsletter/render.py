@@ -245,7 +245,8 @@ def render_html(
         for index in range(1, len(issue.body.highlights) + 1)
     )
     others = issue.other_projects()
-    name_style = f"{_LABEL}font-weight:600;color:{_INK};text-decoration:none;"
+    # Names that link read as links: the same mid-grey underline as every other link.
+    name_style = f"{_LABEL}font-weight:600;{_UNDERLINED}"
     other_names = (
         "".join(
             '<p style="margin:0 0 12px 0;">'

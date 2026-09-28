@@ -41,9 +41,12 @@ Every issue follows the same skimmable shape:
    practice next. It never names a student, never counts who submitted, and never mentions the
    featured projects; code rejects names, participation tallies, overlong copy, and dense prose
    (average sentence over 18 words, any sentence over 26, semicolons, or a Flesch reading ease
-   below 50), feeding the exact problem back to the model. Build references are linked to the
-   student's site. It may add up to two external reference links in Markdown form; each URL is
-   checked to resolve before it is accepted.
+   below 50), feeding the exact problem back to the model. Build references belong to the first
+   paragraph only and are linked to the student's site. The second paragraph is read by students
+   who have not seen the other builds yet, so code also rejects an editorial that is not exactly
+   two paragraphs, a second paragraph that links to any student's build, and any sentence there
+   with more than one comma. It may add up to two external reference links in Markdown form;
+   each URL is checked to resolve before it is accepted.
 2. Four highlights (configurable). Each one shows an image from the student's own post, names
    the student, and gives a headline plus two sentences: what the build is and what makes it
    interesting, then specifically how it does what the assignment asked. A link opens the
@@ -109,7 +112,8 @@ went well, and what they struggled with. The editorial and headline are written 
 across the whole class, so the model reads every submission before it writes a word. Platform
 code computes the weighted total, ranks every project with an assignment fit of at least
 `MIN_GOAL_FIT` (5) ahead of every project below it, excludes students featured in the last
-`NEWSLETTER_HIGHLIGHT_COOLDOWN_ISSUES` sent issues, breaks ties by assignment fit, then
+`NEWSLETTER_HIGHLIGHT_COOLDOWN_ISSUES` sent issues (default 1: only the previous issue's
+featured students sit out), breaks ties by assignment fit, then
 originality, then cognitive augmentation, then project id, and takes the top
 `NEWSLETTER_HIGHLIGHT_COUNT`. The model then writes copy for exactly those projects in that
 order; a response that changes the set or order is re-prompted once and then rejected. The full

@@ -85,6 +85,9 @@ _PARTICIPATION_COUNT = re.compile(
     re.IGNORECASE,
 )
 MAX_EDITORIAL_LINKS = 2
+# The editorial's second paragraph (what to practice next) is read by students who have not
+# seen the other builds: no build references, and no sentence dense with commas or lists.
+MAX_NEXT_STEP_COMMAS = 1
 # Plain-language bounds for the editorial, enforced in code and fed back to the model.
 MAX_AVERAGE_SENTENCE_WORDS = 18
 MAX_SENTENCE_WORDS = 26
@@ -251,21 +254,24 @@ def build_editorial_system_prompt(branding: NewsletterBranding) -> str:
         "and editorial, and pick the closing quote.\n"
         "- headline: at most 12 words, a pun or playful turn on this week's assignment itself "
         "(what the class was asked to build), not a generic line about highlights.\n"
-        "- editorial: at most 150 words (count them; between 110 and 150), two short "
-        "paragraphs, speaking "
-        "to the class directly. Read the lecture slides for the week the assignment was given "
-        "and judge the submissions against them. First: what generally went well, and which "
-        "ideas from the lecture the class clearly absorbed. Second: the blind spots, meaning "
-        "ideas the lecture emphasized that the submissions largely missed, skipped, or "
-        "misapplied, plus the common blockers, all framed constructively in terms of the "
-        "learning goals: what the gap teaches and what to practice next, not a complaint. Have "
-        "fun with it and be concrete: point at actual builds by what they are (a rolling-ball "
-        "physics world, a Downloads-folder renamer, a town of pixel townspeople), the odd "
-        "failure modes that showed up, and the lecture's own phrases, so it reads like a note "
-        "from someone who looked at everything. Whenever you refer to a specific build, wrap "
-        "that phrase in a Markdown link to that submission's site URL from the notes, for "
-        "example [a rolling-ball physics world](https://...), so readers can jump to it. "
-        "Keep it simple: write for a tired student reading on a phone. Plain everyday words, "
+        "- editorial: at most 150 words (count them; between 110 and 150), exactly two short "
+        "paragraphs separated by a blank line, speaking to the class directly. Read the lecture "
+        "slides for the week the assignment was given and judge the submissions against them.\n"
+        "  First paragraph: what generally went well, and which ideas from the lecture the class "
+        "clearly absorbed. Have fun with it and be concrete: point at actual builds by what they "
+        "are (a rolling-ball physics world, a Downloads-folder renamer, a town of pixel "
+        "townspeople) and use the lecture's own phrases, so it reads like a note from someone "
+        "who looked at everything. Whenever you refer to a specific build, wrap that phrase in a "
+        "Markdown link to that submission's site URL from the notes, for example [a rolling-ball "
+        "physics world](https://...), so readers can jump to it.\n"
+        "  Second paragraph: what to practice next. Name the blind spots, meaning ideas the "
+        "lecture emphasized that the submissions largely missed, skipped, or misapplied, and the "
+        "common blockers, framed constructively in terms of the learning goals: what the gap "
+        "teaches and one or two concrete things to try, not a complaint. Readers have not seen "
+        "the other builds yet, so this paragraph never mentions, links, or hints at a particular "
+        "build or its details (no 'the ball', no 'one agent'); describe the general pattern "
+        "instead. Every sentence in it has at most one comma, and it contains no lists.\n"
+        "  Keep it simple: write for a tired student reading on a phone. Plain everyday words, "
         "no jargon, no semicolons, at most one metaphor per paragraph, and no clever "
         "compression. Short sentences of at most 20 words, one idea each, and never more than "
         "three items in a comma-separated run. If a sentence needs a second read, split it. "
@@ -527,6 +533,34 @@ def readability_problems(prose: str) -> list[str]:
     return problems
 
 
+def _is_project_link(url: str, project_urls: Sequence[str]) -> bool:
+    target = url.rstrip("/")
+    for known in project_urls:
+        root = known.rstrip("/")
+        if target == root or target.startswith(f"{root}/"):
+            return True
+    return False
+
+
+def _next_steps_problems(paragraph: str, *, project_urls: Sequence[str]) -> list[str]:
+    """The second paragraph speaks to everyone: no particular build, no comma-dense sentences."""
+
+    problems = [
+        f'the second paragraph must not point at a particular build (found "[{text}]"); readers '
+        "have not seen the builds yet, so describe the general pattern instead"
+        for text, url in MARKDOWN_LINK.findall(paragraph)
+        if _is_project_link(url, project_urls)
+    ]
+    prose = MARKDOWN_LINK.sub(r"\1", paragraph)
+    for sentence in (part.strip() for part in _SENTENCE_SPLIT.split(prose) if part.strip()):
+        if sentence.count(",") > MAX_NEXT_STEP_COMMAS:
+            problems.append(
+                "in the second paragraph, give each sentence at most one comma and no lists; "
+                f'rewrite: "{sentence}"'
+            )
+    return problems
+
+
 def validate_editorial(
     headline: str,
     editorial: str,
@@ -565,6 +599,13 @@ def validate_editorial(
             )
             break
     known = {url.rstrip("/") for url in project_urls}
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n|\n", editorial) if part.strip()]
+    if len(paragraphs) != 2:
+        problems.append(
+            f"write exactly two paragraphs separated by a blank line (found {len(paragraphs)})"
+        )
+    else:
+        problems += _next_steps_problems(paragraphs[1], project_urls=project_urls)
     external = [url for _, url in links if url.rstrip("/") not in known]
     if len(external) > MAX_EDITORIAL_LINKS:
         problems.append(

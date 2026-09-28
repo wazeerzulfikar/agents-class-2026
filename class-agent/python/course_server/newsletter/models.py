@@ -52,7 +52,8 @@ class NewsletterSettings(NewsletterModel):
     subject: ShortText = "The Class Runtime from MAS.S60"
     timezone: ShortText = "America/New_York"
     highlight_count: int = Field(default=4, ge=1, le=8)
-    highlight_cooldown_issues: int = Field(default=2, ge=0, le=12)
+    # Only the previous issue's featured students sit out, so strong builders return quickly.
+    highlight_cooldown_issues: int = Field(default=1, ge=0, le=12)
     recipients: tuple[EmailStr, ...] = ()
     data_path: Path = DEFAULT_NEWSLETTER_DATA_PATH
     schedule_path: Path = DEFAULT_SCHEDULE_PATH
@@ -101,7 +102,7 @@ class NewsletterSettings(NewsletterModel):
             subject=text("NEWSLETTER_SUBJECT", "The Class Runtime from MAS.S60"),
             timezone=text("NEWSLETTER_TIMEZONE", "America/New_York"),
             highlight_count=integer("NEWSLETTER_HIGHLIGHT_COUNT", 4),
-            highlight_cooldown_issues=integer("NEWSLETTER_HIGHLIGHT_COOLDOWN_ISSUES", 2),
+            highlight_cooldown_issues=integer("NEWSLETTER_HIGHLIGHT_COOLDOWN_ISSUES", 1),
             recipients=recipients,
             data_path=path("NEWSLETTER_DATA_PATH", DEFAULT_NEWSLETTER_DATA_PATH),
             schedule_path=path("NEWSLETTER_SCHEDULE_PATH", DEFAULT_SCHEDULE_PATH),

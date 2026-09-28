@@ -347,7 +347,11 @@ def copy_json(*project_ids: str, extra: str = "") -> str:
     )
 
 
-EDITORIAL = " ".join(["The loop ran and it worked well."] * 16)
+EDITORIAL = (
+    " ".join(["The loop ran and it worked well."] * 8)
+    + "\n\n"
+    + " ".join(["Next week, show each run from start to end."] * 7)
+)
 DENSE = (
     "Notwithstanding the aforementioned considerations, the heterogeneous submissions "
     "demonstrated extraordinarily sophisticated architectural instrumentation, particularly "
@@ -519,7 +523,12 @@ def test_public_highlights_page_restates_the_rubric_and_selection_rules() -> Non
     assert f"features the {words[defaults.highlight_count]} that score highest" in page
     assert f"The {words[defaults.highlight_count]} highest weighted totals" in page
     assert f"at least {MIN_GOAL_FIT} on assignment fit" in page
-    assert f"either of the last {words[defaults.highlight_cooldown_issues]} issues" in page
+    cooldown = defaults.highlight_cooldown_issues
+    assert (
+        "featured in the last issue sits this one out"
+        if cooldown == 1
+        else f"featured in either of the last {words[cooldown]} issues"
+    ) in page
     assert "A tie goes to assignment fit, then to originality." in page
 
 
@@ -722,6 +731,36 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
         "count participation" in item
         for item in validate_editorial("Fine", EDITORIAL + " 12 students struggled.")
     )
+    # Two paragraphs; the second names no build and keeps sentences light on commas.
+    jack = "https://mitmedialab.github.io/agents2026-jack/"
+    celebrate = " ".join(["The loop ran and it worked well."] * 7)
+    practice = " ".join(["Next week, show each run from start to end."] * 7)
+    assert any(
+        "exactly two paragraphs" in item
+        for item in validate_editorial("Fine", celebrate + " " + practice)
+    )
+    linked_first = (
+        f"A [rolling-ball world]({jack}weeks/week-01.html), a renamer, and a town all ran. "
+        + celebrate
+        + "\n\n"
+        + practice
+    )
+    assert validate_editorial("Fine", linked_first, project_urls=[jack]) == ()
+    pointed = (
+        celebrate
+        + "\n\n"
+        + f"Next week, look at [the ball]({jack}weeks/week-01.html) again. "
+        + practice
+    )
+    assert any(
+        "must not point at a particular build" in item
+        for item in validate_editorial("Fine", pointed, project_urls=[jack])
+    )
+    listy = celebrate + "\n\nPractice traces, stopping rules, and user checks. " + practice
+    assert any(
+        "at most one comma" in item and "Practice traces, stopping rules" in item
+        for item in validate_editorial("Fine", listy)
+    )
     dense_problems = validate_editorial("Fine", DENSE)
     assert any("sentences average" in item for item in dense_problems)
     assert any("longest sentence" in item for item in dense_problems)
@@ -753,11 +792,12 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
         "3 reference links" in item
         for item in validate_editorial("Fine", many, link_checker=link_checker)
     )
-    # Links to students' own sites are neither counted nor fetched.
+    # Links to students' own sites (first paragraph) are neither counted nor fetched.
     sites = ["https://a.example/", "https://g.example/"]
-    site_linked = EDITORIAL + (
-        " [a rolling-ball world](https://a.example/) and [a renamer](https://g.example)"
-        " and [a maze](https://a.example/) plus [one paper](https://good.example/paper)."
+    site_linked = (
+        "[A rolling-ball world](https://a.example/) and [a renamer](https://g.example)"
+        " and [a maze](https://a.example/) plus [one paper](https://good.example/paper). "
+        + EDITORIAL
     )
     assert (
         validate_editorial(
@@ -1045,6 +1085,8 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert 'src="cid:agents2026-ada"' in render_html(issue, image_src=cid_image_source)
     assert '<a href="https://a.example/week01.html"' in html
     assert 'href="https://g.example/?x=1&amp;y=2"' in html
+    grace = html.split('href="https://g.example/?x=1&amp;y=2" style="', 1)[1].split('"', 1)[0]
+    assert "font-weight:600;" in grace and "border-bottom:1px solid #7d7d78" in grace
     assert ">Ivy</span>" in html and "Hal" not in html
     assert 'href="https://cognitive-agents.media.mit.edu"' in html
     assert "Alan Turing" not in html and "<title>The Class Runtime from MAS.S60</title>" in html
@@ -1570,7 +1612,7 @@ def test_newsletter_settings_read_environment_and_reject_bad_integers() -> None:
         }
     )
     assert settings.recipients == ("list@mit.edu", "staff@mit.edu")
-    assert settings.highlight_count == 3 and settings.highlight_cooldown_issues == 2
+    assert settings.highlight_count == 3 and settings.highlight_cooldown_issues == 1
     assert settings.branding.course_site_url == "https://example.edu/"
     assert settings.branding.course_title == "AI Agents for Cognitive Augmentation"
     assert settings.data_path == Path("/tmp/newsletter-data")

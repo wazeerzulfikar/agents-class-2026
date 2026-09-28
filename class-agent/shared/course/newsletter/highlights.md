@@ -28,7 +28,7 @@ A 5 is an ordinary complete submission, and 8 or more is exceptional. Only what 
 ## How the four are picked
 
 1. A build must score at least 5 on assignment fit. Builds below that rank behind every build that clears it.
-2. Anyone featured in either of the last two issues sits this one out, so the spotlight moves around the class.
+2. Anyone featured in the last issue sits this one out, so the spotlight moves around the class.
 3. The four highest weighted totals are featured. A tie goes to assignment fit, then to originality.
 
 ## What ends up in the issue
