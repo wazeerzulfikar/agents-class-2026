@@ -1031,8 +1031,10 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
         "MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026\n"
         "Class website: https://cognitive-agents.media.mit.edu"
     )
+    # The selection note is a footnote to the section, marked like its heading.
+    assert "HIGHLIGHTS*\n" in text
     assert (
-        "How the Course Agent chooses what to highlight: "
+        "* How the Course Agent chooses what to highlight: "
         "https://cognitive-agents.media.mit.edu/?q=newslettercriteria\n\n"
         "ALL THE OTHER BUILDS THIS WEEK"
     ) in text
@@ -1067,6 +1069,7 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
         in html.split("All the other builds this week")[0].split("Open Ada")[1]
     )
     assert "How the Course Agent chooses what to highlight &rarr;</a>" in html
+    assert ">Highlights*</p>" in html and ">*&nbsp;<a href=" in html
     assert html.count('bgcolor="#000000"') >= 4 and "supported-color-schemes" in html
     # Mac Mail keeps the dark design: both schemes declared, and its color filter off.
     assert '<meta name="color-scheme" content="light dark">' in html

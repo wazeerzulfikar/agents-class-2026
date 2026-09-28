@@ -134,7 +134,7 @@ def render_text(issue: NewsletterIssue) -> str:
         "",
         _RULE,
         "",
-        "HIGHLIGHTS",
+        "HIGHLIGHTS*",
         "",
     ]
     for index, highlight in enumerate(issue.body.highlights, start=1):
@@ -145,7 +145,7 @@ def render_text(issue: NewsletterIssue) -> str:
         if link and (link.post_url or link.site_url):
             lines.append(f"   Open it: {link.post_url or link.site_url}")
         lines.append("")
-    lines.append(f"{_selection_line(issue)}: {highlights_question_url(issue)}")
+    lines.append(f"* {_selection_line(issue)}: {highlights_question_url(issue)}")
     lines.append("")
     lines.append("ALL THE OTHER BUILDS THIS WEEK")
     others = issue.other_projects()
@@ -329,15 +329,17 @@ def render_html(
         f"{editorial}"
         f'<p style="margin:-6px 0 0 0;{_LABEL}">&mdash; {escape(branding.editor_name)}</p>'
         f"{_TEXT_CLOSE}{rule}{_TEXT_OPEN}"
-        f'<p style="margin:0 0 24px 0;{_SECTION}">Highlights</p>'
+        f'<p style="margin:0 0 24px 0;{_SECTION}">Highlights*</p>'
         f"{_TEXT_CLOSE}"
         f"{highlights}"
+        # A footnote to the whole section, marked like the heading and set apart from the
+        # last highlight, so it cannot read as that build's link.
         + _text_block(
-            '<p style="margin:-16px 0 0 0;">'
+            f'<p style="margin:0;{_LABEL}">*&nbsp;'
             + _anchor(
                 highlights_question_url(issue),
                 f"{escape(_selection_line(issue))} &rarr;",
-                style=f"{_LABEL}{_UNDERLINED}",
+                style=f"{_LABEL}{_UNDERLINED}color:{_MUTED};",
             )
             + "</p>"
         )
