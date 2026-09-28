@@ -167,8 +167,7 @@ def render_text(issue: NewsletterIssue) -> str:
             f"— {issue.quote.author}, {issue.quote.source}"
             + (f" ({issue.quote.url})" if issue.quote.url else ""),
             "",
-            f"Curation and commentary by {branding.editor_name}.",
-            f"Reviewed by {_in_sentence(branding.sender_name)}.",
+            f"This newsletter was created by {branding.editor_name}.",
             "",
             _course_line(issue),
             f"Class website: {branding.course_site_url}",
@@ -358,10 +357,8 @@ def render_html(
         f'<p style="margin:0;{_LABEL}">{attribution}</p>'
         f"{_TEXT_CLOSE}{rule}{_TEXT_OPEN}"
         # Colophon order: who made this issue, then whose course it is and where to find it.
-        f'<p style="margin:0 0 10px 0;{_LABEL}">Curation and commentary by '
+        f'<p style="margin:0 0 26px 0;{_LABEL}">This newsletter was created by '
         f"{escape(branding.editor_name)}</p>"
-        f'<p style="margin:0 0 26px 0;{_LABEL}">Reviewed by '
-        f"{escape(_in_sentence(branding.sender_name))}</p>"
         f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(_course_line(issue))}</p>'
         '<p style="margin:0;">'
         + _anchor(

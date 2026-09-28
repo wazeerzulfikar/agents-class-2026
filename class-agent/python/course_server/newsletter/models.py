@@ -40,8 +40,9 @@ class NewsletterBranding(NewsletterModel):
     course_site_url: Annotated[str, StringConstraints(pattern=r"^https://[^\s]+$")] = (
         "https://cognitive-agents.media.mit.edu"
     )
+    # No longer printed; kept so issues stored with it still load.
     sender_name: ShortText = "The MAS.S60 teaching team"
-    # Signs the editorial and is credited for curation in the footer.
+    # Signs the editorial and is credited in the footer as the newsletter's creator.
     editor_name: ShortText = "The Course Agent"
 
 

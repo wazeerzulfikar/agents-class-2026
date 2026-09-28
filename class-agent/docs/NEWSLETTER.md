@@ -68,10 +68,9 @@ Every issue follows the same skimmable shape:
    collected prose, and the editorial call picks the one with the most personality, attributed and
    linked to the student's site. When no verified candidate exists, a curated quote from an AI or computing
    pioneer is used instead, rotated across issues.
-5. A colophon, in this order: the credits ("Curation and commentary by The Course Agent",
-   "Reviewed by the MAS.S60 teaching team"), then the course line
-   (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`), and last the class
-   website, `cognitive-agents.media.mit.edu`.
+5. A colophon, in this order: the credit ("This newsletter was created by The Course Agent"),
+   then the course line (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`), and
+   last the class website, `cognitive-agents.media.mit.edu`.
 
 The email subject is `The Class Runtime from MAS.S60`. Each message is sent as plain text with an
 HTML alternative. The HTML keeps the course site's black ground and ivory Helvetica, with

@@ -1040,10 +1040,9 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "THE ASSIGNMENT: Build a minimal agent loop.\n\nThe loop ran." in text
     assert "brief" not in text.casefold() and "scroll" not in text.casefold()
     assert "\n\n— The Course Agent\n\n" in text
-    # Colophon: credits first, then the course line, then the class website last.
+    # Colophon: the credit first, then the course line, then the class website last.
     assert text.rstrip().endswith(
-        "Curation and commentary by The Course Agent.\n"
-        "Reviewed by the MAS.S60 teaching team.\n\n"
+        "This newsletter was created by The Course Agent.\n\n"
         "MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026\n"
         "Class website: https://cognitive-agents.media.mit.edu"
     )
@@ -1072,14 +1071,10 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert "<h1" in html and "Week one is in the loop." in html
     assert "How the week went</p>" in html
     assert "&mdash; The Course Agent</p>" in html
-    assert "Curation and commentary by The Course Agent</p>" in html
-    assert "Reviewed by the MAS.S60 teaching team</p>" in html and "Sent by" not in html
-    footer = html.split("Curation and commentary by", 1)[1]
-    assert (
-        footer.index("Reviewed by")
-        < footer.index("MAS.S60 · AI Agents")
-        < footer.index(">cognitive-agents.media.mit.edu</a>")
-    )
+    assert "This newsletter was created by The Course Agent</p>" in html
+    assert "Reviewed by" not in html and "Sent by" not in html
+    footer = html.split("This newsletter was created by", 1)[1]
+    assert footer.index("MAS.S60 · AI Agents") < footer.index(">cognitive-agents.media.mit.edu</a>")
     assert (
         '<a href="https://cognitive-agents.media.mit.edu/?q=newslettercriteria"'
         in html.split("All the other builds this week")[0].split("Open Ada")[1]
