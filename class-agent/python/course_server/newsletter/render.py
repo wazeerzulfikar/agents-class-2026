@@ -12,15 +12,16 @@ import re
 from collections.abc import Callable
 from datetime import date, timedelta
 from html import escape
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from .models import HighlightImage, NewsletterIssue, ProjectLink
 
 _MARKDOWN_LINK = re.compile(r"\[([^\]\n]{1,120})\]\((https://[^\s)]+)\)")
 
 _RULE = "-" * 60
-# The course site's public page explaining highlight selection (apps/web/src/aboutRoute.ts).
-HIGHLIGHTS_PAGE_PATH = "/newsletter/highlights"
+# The selection line opens the course site with this as the student's first question to the
+# Course Agent (apps/web/src/startupQuery.ts reads `q`), which answers from the course FAQ.
+HIGHLIGHTS_QUESTION = "newslettercriteria"
 
 # Mirrors packages/ui/src/styles.css tokens; email clients need literal values.
 _GROUND = "#000000"
@@ -90,8 +91,9 @@ def _course_line(issue: NewsletterIssue) -> str:
     )
 
 
-def highlights_page_url(issue: NewsletterIssue) -> str:
-    return issue.branding.course_site_url.rstrip("/") + HIGHLIGHTS_PAGE_PATH
+def highlights_question_url(issue: NewsletterIssue) -> str:
+    site = issue.branding.course_site_url.rstrip("/")
+    return f"{site}/?{urlencode({'q': HIGHLIGHTS_QUESTION})}"
 
 
 def _in_sentence(name: str) -> str:
@@ -141,7 +143,7 @@ def render_text(issue: NewsletterIssue) -> str:
         if link and (link.post_url or link.site_url):
             lines.append(f"   Open it: {link.post_url or link.site_url}")
         lines.append("")
-    lines.append(f"{_selection_line(issue)}: {highlights_page_url(issue)}")
+    lines.append(f"{_selection_line(issue)}: {highlights_question_url(issue)}")
     lines.append("")
     lines.append("ALL THE OTHER BUILDS THIS WEEK")
     others = issue.other_projects()
@@ -312,9 +314,10 @@ def render_html(
         + f'<h1 style="margin:0 0 24px 0;font-family:{_SANS};font-size:34px;line-height:1.15;'
         f'font-weight:500;letter-spacing:-0.01em;color:{_INK};">{escape(issue.body.headline)}</h1>'
         f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(_window_label(issue))}</p>'
-        f'<p style="margin:0 0 6px 0;{_SECTION}">The assignment</p>'
+        # The assignment is context for the issue, so it sits one step greyer than the headline.
+        f'<p style="margin:0 0 6px 0;{_SECTION}color:{_MUTED};">The assignment</p>'
         f'<p style="margin:0 0 28px 0;font-family:{_SANS};font-size:20px;line-height:1.4;'
-        f'font-weight:400;color:{_INK};">{escape(issue.week.tutorial)}</p>'
+        f'font-weight:400;color:{_MUTED};">{escape(issue.week.tutorial)}</p>'
         f'<p style="margin:0 0 12px 0;{_SECTION}">How the week went</p>'
         f"{editorial}"
         f'<p style="margin:-6px 0 0 0;{_LABEL}">&mdash; {escape(branding.editor_name)}</p>'
@@ -325,7 +328,7 @@ def render_html(
         + _text_block(
             '<p style="margin:-16px 0 0 0;">'
             + _anchor(
-                highlights_page_url(issue),
+                highlights_question_url(issue),
                 f"{escape(_selection_line(issue))} &rarr;",
                 style=f"{_LABEL}{_UNDERLINED}",
             )

@@ -993,7 +993,7 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     )
     assert (
         "How the Course Agent chooses what to highlight: "
-        "https://cognitive-agents.media.mit.edu/newsletter/highlights\n\n"
+        "https://cognitive-agents.media.mit.edu/?q=newslettercriteria\n\n"
         "ALL THE OTHER BUILDS THIS WEEK"
     ) in text
     assert "Open it: https://a.example/week01.html" in text
@@ -1023,7 +1023,7 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
         < footer.index(">cognitive-agents.media.mit.edu</a>")
     )
     assert (
-        '<a href="https://cognitive-agents.media.mit.edu/newsletter/highlights"'
+        '<a href="https://cognitive-agents.media.mit.edu/?q=newslettercriteria"'
         in html.split("All the other builds this week")[0].split("Open Ada")[1]
     )
     assert "How the Course Agent chooses what to highlight &rarr;</a>" in html
@@ -1035,7 +1035,9 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     )
     assert "Grace built a tiny tool-calling loop." in html
     assert "Nothing posted for this week yet." in html
-    assert "The assignment</p>" in html and ">Build a minimal agent loop.</p>" in html
+    # The assignment label and sentence are one step greyer than the headline and sections.
+    assert 'color:#d6d6d0;">The assignment</p>' in html
+    assert 'color:#d6d6d0;">Build a minimal agent loop.</p>' in html
     assert "Week 1 · Sep 15 \u2013 Sep 21, 2026" in html
     assert "Brief" not in html and "Keep scrolling" not in html
     assert 'src="2026-week01/agents2026-ada.jpg"' in html

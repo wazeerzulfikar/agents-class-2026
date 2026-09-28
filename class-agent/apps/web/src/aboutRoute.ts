@@ -17,7 +17,7 @@ export const COURSE_DOCUMENTS: Record<CourseDocument, CourseDocumentRoute> = {
     path: "/about",
     uri: "course://syllabus",
   },
-  // Every issue of The Class Runtime links here (python/course_server/newsletter/render.py).
+  // How The Class Runtime picks highlights; issues now link to the Course Agent's FAQ answer.
   "newsletter-highlights": {
     errorMessage: "This page could not be loaded. Please try again.",
     loadingMessage: "Loading…",

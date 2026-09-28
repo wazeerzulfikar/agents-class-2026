@@ -50,8 +50,10 @@ Every issue follows the same skimmable shape:
    student's post for the week. Links always go somewhere that renders on its own: a post that is
    only an HTML fragment shown inside the site's shell links to the site instead, and when only
    the browser can find the post (a script-built menu), the highlight links to the post page the
-   image finder reached. After the last highlight, one line links to the public explainer on the course site,
-   `https://cognitive-agents.media.mit.edu/newsletter/highlights` (see below).
+   image finder reached. After the last highlight, one line ("How the Course Agent chooses what to
+   highlight") links to `https://cognitive-agents.media.mit.edu/?q=newslettercriteria`, which
+   opens the course site and sends that query to the Course Agent as the student's first
+   message; the agent answers from the course FAQ (see below).
 3. Every other student who posted work that week, with one sentence on what they built and a
    link to their site. Students with nothing beyond the starter template are left off the list.
 4. A closing quote. Preferably a line from a student's own post that week, featured or not: the
@@ -69,7 +71,9 @@ The email subject is `The Class Runtime from MAS.S60`. Each message is sent as p
 HTML alternative. The HTML keeps the course site's black ground and ivory Helvetica, with
 section labels ("The assignment", "How the week went") set small, sentence-case and medium
 weight. Secondary text is near-white rather than the site's muted grey, which reads as a
-watermark in an inbox; levels are separated by size and weight instead of by dimming.
+watermark in an inbox; levels are separated by size and weight instead of by dimming. The
+assignment label and sentence are set one step greyer (`#d6d6d0`, the same light
+grey as the dates) so they read as context under the headline.
 
 The Gmail apps recolor dark emails when the phone is in dark mode: plain backgrounds are
 lightened and light text is darkened. The renderer counters both. The ground and the section
@@ -112,8 +116,10 @@ order; a response that changes the set or order is re-prompted once and then rej
 scoreboard with rationales is stored in the issue and printed by `draft` and `show`, so the choice
 is inspectable.
 
-Students see the same rules, in plain language, on the course site at `/newsletter/highlights`.
-That page is the public course resource `course://newsletter-highlights`
+Each issue's selection link asks the Course Agent, which answers from a staff-approved FAQ entry
+on how highlights are chosen; keep that entry in step with these rules. The same rules, in plain
+language, are also on the course site at `/newsletter/highlights`. That page is the public course
+resource `course://newsletter-highlights`
 (`shared/course/newsletter/highlights.md`), rendered by the web app with the syllabus page's
 component, so the Course Agent can also answer questions about it. A test checks that its
 criteria, weights, questions, goal-fit floor, cooldown, and highlight count match the code; change
