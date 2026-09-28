@@ -256,8 +256,9 @@ def render_html(
                 else f'<span style="{_LABEL}font-weight:600;color:{_INK};">'
                 f"{escape(link.label)}</span>"
             )
-            + f'<br><span style="font-family:{_SANS};font-size:15px;line-height:1.5;'
-            f'color:{_INK_SOFT};">'
+            # A little air under the underlined name; clients without inline-block just wrap.
+            + f'<br><span style="display:inline-block;margin-top:5px;font-family:{_SANS};'
+            f'font-size:15px;line-height:1.5;color:{_INK_SOFT};">'
             + escape(issue.built_for(link.project_id) or "Nothing posted for this week yet.")
             + "</span></p>"
             for link in others
