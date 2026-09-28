@@ -215,6 +215,8 @@ class ProjectScore(NewsletterModel):
     # How directly the build helps a person think; absent from issues scored before it existed.
     augmentation: int | None = Field(default=None, ge=0, le=10)
     total: float = Field(ge=0, le=10)
+    # Nothing beyond a starter or welcome site: left off the list of builds and never featured.
+    blank: bool = False
     rationale: Annotated[str, StringConstraints(strip_whitespace=True, max_length=600)] = ""
     built: Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)] = ""
     went_well: Annotated[str, StringConstraints(strip_whitespace=True, max_length=400)] = ""
@@ -340,12 +342,12 @@ class NewsletterIssue(NewsletterModel):
         return score.built or None if score is not None else None
 
     def other_projects(self) -> tuple[ProjectLink, ...]:
-        """Students who posted this week and were not featured."""
+        """Students who posted a real build this week and were not featured."""
 
-        highlighted = set(self.highlighted_project_ids())
-        return tuple(
-            link for link in self.roster if link.posted and link.project_id not in highlighted
-        )
+        hidden = set(self.highlighted_project_ids()) | {
+            score.project_id for score in self.scores if score.blank
+        }
+        return tuple(link for link in self.roster if link.posted and link.project_id not in hidden)
 
 
 def issue_id_for(week: CourseWeek) -> str:

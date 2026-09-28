@@ -189,7 +189,8 @@ def _print_scores(issue: NewsletterIssue, *, out: TextIO) -> None:
     print("  TOTAL  " + "".join(f"{_COLUMN[c.key]:>5}" for c in RUBRIC) + "  PROJECT", file=out)
     for score in issue.scores:
         marker = "*" if score.project_id in featured else " "
-        flag = "" if score.eligible else "  (featured recently)"
+        flag = "  (blank: left off the list)" if score.blank else ""
+        flag += "" if score.eligible else "  (featured recently)"
         cells = "".join(
             f"{value if isinstance(value, int) else '-':>5}"
             for value in (getattr(score, criterion.key) for criterion in RUBRIC)

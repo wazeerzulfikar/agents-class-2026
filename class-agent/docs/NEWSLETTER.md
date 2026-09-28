@@ -58,7 +58,10 @@ Every issue follows the same skimmable shape:
    opens the course site and sends that query to the Course Agent as the student's first
    message; the agent answers from the course FAQ (see below).
 3. Every other student who posted work that week, with one sentence on what they built and a
-   link to their site. Students with nothing beyond the starter template are left off the list.
+   link to their site. The scorer marks a submission `blank` when it is nothing beyond an
+   untouched or lightly edited starter site, a welcome or about page, or an empty folder. Blank
+   submissions are left off the list and are never featured; a plan, a concept page, or a
+   partial or broken build still counts. The instructor scoreboard flags blank rows.
 4. A closing quote. Preferably a line from a student's own post that week, featured or not: the
    scoring pass asks each project for up to three sentences with personality (surprising, funny,
    candid, vivid; never a definition), code verifies each appears verbatim in that student's

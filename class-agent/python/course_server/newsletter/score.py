@@ -95,6 +95,12 @@ RUBRIC: tuple[RubricCriterion, ...] = (
     ),
 )
 SCORE_WEIGHTS: dict[str, float] = {criterion.key: criterion.weight for criterion in RUBRIC}
+# A blank submission is left off the issue's list of builds and is never featured.
+BLANK_RULE = (
+    "true only when the submission has nothing beyond an untouched or lightly edited starter "
+    "site, a welcome or about page, or an empty folder. Anything more, even a plan, a concept "
+    "page, or a partial or broken build, is false."
+)
 if abs(sum(SCORE_WEIGHTS.values()) - 1.0) > 1e-9:
     raise RuntimeError("Newsletter rubric weights must sum to 1.")
 
@@ -107,6 +113,10 @@ SCORE_SCHEMA: dict[str, object] = {
                 "description": f"0-10: {criterion.question}",
             }
             for criterion in RUBRIC
+        },
+        "blank": {
+            "type": "boolean",
+            "description": BLANK_RULE,
         },
         "rationale": {
             "type": "string",
@@ -148,6 +158,7 @@ SCORE_SCHEMA: dict[str, object] = {
     },
     "required": [
         *(criterion.key for criterion in RUBRIC),
+        "blank",
         "rationale",
         "built",
         "went_well",
@@ -172,6 +183,8 @@ def build_score_system_prompt(branding: NewsletterBranding) -> str:
         "builds to feature in the weekly newsletter.\n\n"
         f"Score {len(RUBRIC)} things from 0 to 10 using only the evidence provided:\n"
         + "".join(f"- {criterion.key}: {criterion.guidance}\n" for criterion in RUBRIC)
+        + f"Set `blank` {BLANK_RULE} Blank submissions are left off the newsletter's list of "
+        "builds.\n"
         + "Be strict and consistent: 5 is an ordinary complete submission, 8 or more is "
         "exceptional, and evidence-free claims do not count.\n"
         "Also write, in plain language for the class: `built`, one sentence (at most 18 words) "
@@ -293,6 +306,7 @@ def parse_score(raw: str, *, project_id: str, eligible: bool) -> ProjectScore:
             **values,
             total=round(sum(criterion.weight * values[criterion.key] for criterion in RUBRIC), 2),
             rationale=rationale,
+            blank=payload.get("blank") is True,
             built=str(payload.get("built", ""))[:300],
             went_well=str(payload.get("went_well", ""))[:400],
             struggled=str(payload.get("struggled", ""))[:400],
@@ -348,7 +362,8 @@ def score_projects(
         except Exception as error:  # a provider failure for one project must not stop the rest
             say(f"  {project.project_id}: not scored ({type(error).__name__})")
             return None
-        say(f"  {project.project_id}: total {score.total:.1f} ({score_breakdown(score)})")
+        flag = "; blank" if score.blank else ""
+        say(f"  {project.project_id}: total {score.total:.1f} ({score_breakdown(score)}{flag})")
         return score
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
@@ -384,5 +399,7 @@ def _ranking_key(score: ProjectScore) -> tuple[int, float, int, int, int, str]:
 def select_highlights(scores: Sequence[ProjectScore], *, count: int) -> tuple[str, ...]:
     """Top eligible projects by weighted total; goal-fit failures rank last."""
 
-    ranked = sorted((score for score in scores if score.eligible), key=_ranking_key)
+    ranked = sorted(
+        (score for score in scores if score.eligible and not score.blank), key=_ranking_key
+    )
     return tuple(score.project_id for score in ranked[: max(0, count)])

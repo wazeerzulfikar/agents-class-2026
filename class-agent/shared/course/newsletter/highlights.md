@@ -36,7 +36,7 @@ A 5 is an ordinary complete submission, and 8 or more is exceptional. Only what 
 - **The picture** comes from your own post. The Course Agent looks at the images, diagrams, video stills, and canvases you published and picks the one that shows the build best. If none of them works, it uses a screenshot of the post.
 - **The description** says in plain words what the build does and how it answers the assignment.
 - **The closing quote** is usually a line from a student's post, copied word for word and checked against the source.
-- **Every other build** with a post that week is listed at the end of the issue with a one-line description.
+- **Every other build** with a post that week is listed at the end of the issue with a one-line description. A site that is still only the starter or a welcome page is left off until there is something built.
 
 ## Who checks it
 

@@ -372,6 +372,7 @@ def score_json(
     execution: int,
     rationale: str = "ok",
     augmentation: int = 6,
+    blank: bool = False,
 ) -> str:
     return json.dumps(
         {
@@ -379,6 +380,7 @@ def score_json(
             "execution": execution,
             "goal_fit": goal_fit,
             "augmentation": augmentation,
+            "blank": blank,
             "rationale": rationale,
             "built": "A tidy agent loop.",
             "went_well": "Clear loop.",
@@ -493,8 +495,22 @@ def test_rubric_weights_four_criteria_and_old_scores_still_load() -> None:
         "agents2026-dee",
     )
 
+    # A blank submission (only a starter or welcome site) is never featured.
+    blank = parse_score(
+        score_json(goal_fit=9, originality=9, execution=9, blank=True),
+        project_id="agents2026-eve",
+        eligible=True,
+    )
+    assert blank.blank and not score.blank
+    assert select_highlights([*tied, blank], count=4) == (
+        "agents2026-cal",
+        "agents2026-bea",
+        "agents2026-dee",
+    )
+
     prompt = build_score_system_prompt(NewsletterBranding())
     assert "Score 4 things from 0 to 10" in prompt
+    assert "Set `blank` true only when the submission has nothing beyond" in prompt
     for criterion in RUBRIC:
         assert f"- {criterion.key}: {criterion.guidance}" in prompt
 
@@ -1083,6 +1099,17 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
         and ">the ReAct paper</a> for why.</p>" in html
     )
     assert "Grace built a tiny tool-calling loop." in html
+    # A blank build (only a starter or welcome site) is left off the list.
+    grace_blank = issue.model_copy(
+        update={
+            "scores": tuple(
+                score.model_copy(update={"blank": score.project_id == "agents2026-grace"})
+                for score in issue.scores
+            )
+        }
+    )
+    assert [link.label for link in grace_blank.other_projects()] == ["Ivy"]
+    assert "Grace" not in render_text(grace_blank).split("ALL THE OTHER BUILDS")[1]
     assert "Nothing posted for this week yet." in html
     # The assignment label and sentence are one step greyer than the headline and sections.
     assert 'color:#d6d6d0;">The assignment</p>' in html

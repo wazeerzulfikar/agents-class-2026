@@ -115,6 +115,7 @@ def issue_summary(issue: NewsletterIssue, store: FileNewsletterStore) -> dict[st
             "goal_fit": score.goal_fit,
             "augmentation": score.augmentation,
             "execution": score.execution,
+            "blank": score.blank,
             "eligible": score.eligible,
             "rationale": score.rationale,
         }
