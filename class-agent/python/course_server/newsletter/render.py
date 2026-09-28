@@ -36,6 +36,12 @@ _SANS = "'Helvetica Neue',Helvetica,Arial,sans-serif"
 # Section labels and metadata: the body face in sentence case, small and medium-weight.
 _LABEL = f"font-family:{_SANS};font-size:14px;line-height:1.4;font-weight:500;color:{_MUTED};"
 _SECTION = f"font-family:{_SANS};font-size:15px;line-height:1.4;font-weight:600;color:{_INK};"
+# Section subheadings sit between the 17px body and the 34px headline, bold so they read as
+# headings, and small enough that "All the other builds this week" fits a phone's width.
+_SUBHEAD = (
+    f"font-family:{_SANS};font-size:22px;line-height:1.25;font-weight:700;"
+    f"letter-spacing:-0.01em;color:{_INK};"
+)
 # Link underlines sit inside the text blend below, where a client that recolors borders and one
 # that does not produce mirror-image results; a mid grey looks the same either way.
 _LINK_LINE = "#7d7d78"
@@ -325,11 +331,11 @@ def render_html(
         f'<p style="margin:0 0 6px 0;{_SECTION}color:{_MUTED};">The assignment</p>'
         f'<p style="margin:0 0 28px 0;font-family:{_SANS};font-size:20px;line-height:1.4;'
         f'font-weight:400;color:{_MUTED};">{escape(issue.week.tutorial)}</p>'
-        f'<p style="margin:0 0 12px 0;{_SECTION}">How the week went</p>'
+        f'<p style="margin:0 0 14px 0;{_SUBHEAD}">How the week went</p>'
         f"{editorial}"
         f'<p style="margin:-6px 0 0 0;{_LABEL}">&mdash; {escape(branding.editor_name)}</p>'
         f"{_TEXT_CLOSE}{rule}{_TEXT_OPEN}"
-        f'<p style="margin:0 0 24px 0;{_SECTION}">Highlights*</p>'
+        f'<p style="margin:0 0 24px 0;{_SUBHEAD}">Highlights*</p>'
         f"{_TEXT_CLOSE}"
         f"{highlights}"
         # A footnote to the whole section, marked like the heading and set apart from the
@@ -344,7 +350,7 @@ def render_html(
             + "</p>"
         )
         + f"{rule}{_TEXT_OPEN}"
-        f'<p style="margin:0 0 16px 0;{_SECTION}">All the other builds this week</p>'
+        f'<p style="margin:0 0 18px 0;{_SUBHEAD}">All the other builds this week</p>'
         f"{other_names}"
         f"{_TEXT_CLOSE}{rule}{_TEXT_OPEN}"
         f'<p style="margin:0 0 12px 0;font-family:{_SANS};font-size:21px;line-height:1.4;'

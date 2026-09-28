@@ -1104,7 +1104,10 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     assert '<a href="https://a.example/"' in html and "Ada, from their week 1 post</a>" in html
     assert "background-color:#000000" in html and "#f5f5f2" in html
     # Section labels are sentence-case sans, never tracked-out monospace, italic, or webfonts.
-    assert 'font-weight:600;color:#f5f5f2;">How the week went</p>' in html
+    # Section subheadings are real subheadings: 22px bold, between body text and headline.
+    for heading in ("How the week went", "Highlights*", "All the other builds this week"):
+        style = html.split(f">{heading}</p>", 1)[0].rsplit('style="', 1)[1]
+        assert "font-size:22px" in style and "font-weight:700" in style, heading
     assert "monospace" not in html and "uppercase" not in html and "italic" not in html
     assert "fonts.googleapis.com" not in html
     # Secondary text is near-white: the site's faint grey never reaches the email.
