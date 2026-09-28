@@ -54,6 +54,8 @@ _TEXT_OPEN = (
     '<div style="background:#000;mix-blend-mode:difference;">'
 )
 _TEXT_CLOSE = "</div></div>"
+# WebKit's per-element opt-out from the color filter Mac Mail applies to adapt a message.
+_APPLE_FILTER_OFF = "html,body,*{-apple-color-filter:none !important;}"
 # Section rules are painted as gradients, which Gmail's dark mode leaves alone.
 _SECTION_RULE = (
     '<div style="margin:36px 0;height:1px;line-height:1px;font-size:1px;'
@@ -280,14 +282,17 @@ def render_html(
         "<!DOCTYPE html>\n"
         '<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        '<meta name="color-scheme" content="dark">'
-        '<meta name="supported-color-schemes" content="dark">'
-        # Mail clients that honor a stylesheet get an explicit dark scheme; the inline
+        # Mac Mail recolors a message with its own color filter to match its light or dark
+        # setting, which turned the white text dark. Two guards, each enough on its own in
+        # testing: declaring support for both schemes, and switching the filter off.
+        '<meta name="color-scheme" content="light dark">'
+        '<meta name="supported-color-schemes" content="light dark">'
+        # Mail clients that honor a stylesheet get the scheme and a black ground; the inline
         # bgcolor attributes below carry the ground for the ones that strip <style>.
-        f"<style>:root{{color-scheme:dark;}}body,table,td{{background-color:{_GROUND};}}"
-        f"a{{color:{_INK};}}</style>"
+        f"<style>:root{{color-scheme:light dark;}}body,table,td{{background-color:{_GROUND};}}"
+        f"a{{color:{_INK};}}{_APPLE_FILTER_OFF}</style>"
         f"<title>{escape(issue.subject)}</title></head>"
-        f'<body bgcolor="{_GROUND}" style="margin:0;padding:0;'
+        f'<body bgcolor="{_GROUND}" style="-apple-color-filter:none;margin:0;padding:0;'
         f'background-color:{_GROUND};color:{_INK};">'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
         f'bgcolor="{_GROUND}" style="background-color:{_GROUND};"><tr>'

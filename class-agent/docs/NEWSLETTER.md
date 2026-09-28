@@ -92,6 +92,13 @@ effect there, and neither did color keywords, `<font>` tags, or `!important`. Ev
 rendered correctly in Gmail on the web. Link underlines use a mid grey, which looks the same
 whether or not a client also recolors border colors inside the wrappers.
 
+Mac Mail adapts messages to its own light or dark setting with a WebKit color filter that
+flips the lightness of every CSS color but leaves images alone, so the white text turned dark.
+The email opts out twice: it declares support for both schemes (`color-scheme: light dark` in the
+meta tags and CSS), and it sets `-apple-color-filter: none` on every element. Only dark colors are
+defined, so both declarations keep the same dark design. In a Mac Mail test each guard worked on
+its own; both stay for robustness, and other clients ignore the filter property.
+
 ## How highlights are chosen
 
 Every active project is scored, one model call each, from its bounded evidence against a fixed

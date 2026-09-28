@@ -1068,6 +1068,12 @@ def test_render_text_and_html_carry_links_lists_quote_footer_and_escaping() -> N
     )
     assert "How the Course Agent chooses what to highlight &rarr;</a>" in html
     assert html.count('bgcolor="#000000"') >= 4 and "supported-color-schemes" in html
+    # Mac Mail keeps the dark design: both schemes declared, and its color filter off.
+    assert '<meta name="color-scheme" content="light dark">' in html
+    assert '<meta name="supported-color-schemes" content="light dark">' in html
+    assert ":root{color-scheme:light dark;}" in html
+    assert "html,body,*{-apple-color-filter:none !important;}</style>" in html
+    assert '<body bgcolor="#000000" style="-apple-color-filter:none;' in html
     assert html.count("The loop ran.</p>") == 1
     assert (
         '<a href="https://arxiv.org/abs/2210.03629?x=1&amp;y=2"' in html
