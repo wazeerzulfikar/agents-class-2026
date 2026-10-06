@@ -12,7 +12,7 @@ Every week, the Course Agent reads what each student built and published, scores
 - **Your repository, read-only.** The files in the week's folder, the notes you wrote there, and the commit messages from the week's build window. The Course Agent never writes to your repository.
 - **Your post for the week.** The text of the post on your project site, and the pictures, diagrams, and videos in it.
 
-A build is considered when there is something to look at for the week: files in the week's folder, commits during the week, or a published site.
+A build is considered when there is something to look at for the week: files in the week's folder, commits during the week, or a page on your site named for the week.
 
 ## The rubric
 
@@ -36,7 +36,7 @@ A 5 is an ordinary complete submission, and 8 or more is exceptional. Only what 
 - **The picture** comes from your own post. The Course Agent looks at the images, diagrams, video stills, and canvases you published and picks the one that shows the build best. If none of them works, it uses a screenshot of the post.
 - **The description** says in plain words what the build does and how it answers the assignment.
 - **The closing quote** is usually a line from a student's post, copied word for word and checked against the source.
-- **Every other build** with a post that week is listed at the end of the issue with a one-line description. A site that is still only the starter or a welcome page is left off until there is something built.
+- **Every other build** with a post that week is listed at the end of the issue with a one-line description of what was built that week, linked to that week's post. A student with nothing made for the week is left off that week's list, even when their site holds earlier work.
 
 ## Who checks it
 

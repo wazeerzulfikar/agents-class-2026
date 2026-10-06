@@ -32,36 +32,56 @@ files as well as from the agent.
 
 Every issue follows the same skimmable shape:
 
-1. A punny headline about the week's assignment, the week's dates, the assignment itself, and an
-   editorial of up to 150 words on how the class did against what was taught. The editorial call
-   receives the text of that week's slide deck from `shared/course/slides/week-NN/` and the
-   syllabus learning goals alongside the anonymized staff notes on every submission, and writes
-   two paragraphs: what went well and which lecture ideas the class absorbed, then the blind spots
+1. A punny headline about the main topic of the week's assignment, the week's dates, the
+   assignment itself, and an editorial of up to 150 words on how the class did against what was
+   taught. The headline is written against the assignment as the class received it: the
+   published assignment record whose deadline falls in the week's window (see "Data sources").
+   It must use at least one term from that record's title (another form of the word counts,
+   such as "design" for "designing"); code rejects one that uses none and feeds the title's
+   terms back to the model. When no record covers the week, the schedule's assignment line and
+   topic stand in, and the draft log says so. The editorial call
+   receives that assignment text, the text of that week's slide deck from
+   `shared/course/slides/week-NN/`, and the syllabus learning goals alongside the anonymized
+   staff notes on every submission that made something that week, and writes two paragraphs.
+   The first is a synthesis of how the class answered the assignment: the two or three
+   approaches that recurred across the builds (in a week on interfaces, which form factors
+   people chose, what the agent notices, when it speaks up), not a tour of builds, since the
+   highlights and the full list describe each one. Builds may appear there only as examples of
+   an approach, linked to the student's site: code rejects more than three build links or more
+   than two sentences that point at a build. The second paragraph names the blind spots
    (lecture ideas the submissions missed or misapplied) and common blockers, framed as what to
-   practice next. It never names a student, never counts who submitted, and never mentions the
-   featured projects; code rejects names, participation tallies, overlong copy, and dense prose
+   practice next. The editorial never names a student and never counts who submitted; code
+   rejects names, participation tallies, overlong copy, and dense prose
    (average sentence over 18 words, any sentence over 26, semicolons, or a Flesch reading ease
-   below 50), feeding the exact problem back to the model. Build references belong to the first
-   paragraph only and are linked to the student's site. The second paragraph is read by students
+   below 50), feeding the exact problem back to the model. The second paragraph is read by students
    who have not seen the other builds yet, so code also rejects an editorial that is not exactly
    two paragraphs, a second paragraph that links to any student's build, and any sentence there
    with more than one comma. It may add up to two external reference links in Markdown form;
    each URL is checked to resolve before it is accepted.
 2. Four highlights (configurable). Each one shows an image from the student's own post, names
    the student, and gives a headline plus two sentences: what the build is and what makes it
-   interesting, then specifically how it does what the assignment asked. A link opens the
-   student's post for the week. Links always go somewhere that renders on its own: a post that is
-   only an HTML fragment shown inside the site's shell links to the site instead, and when only
+   interesting, then specifically how it does what the assignment asked. The student's name is
+   printed beside the headline, so code rejects a description whose sentence opens with that
+   name as if the student were the tool ("Ada helps you..."); the build is the subject. A link
+   opens the student's post for the week. Links always go somewhere that renders on its own: a post that is
+   only an HTML fragment shown inside the site's shell links to the site instead, at
+   `#<the post's file name>` (a shell that loads posts by name opens it from there; any other
+   site shows its home page), and when only
    the browser can find the post (a script-built menu), the highlight links to the post page the
    image finder reached. After the last highlight, one line ("How the Course Agent chooses what to
    highlight") links to `https://cognitive-agents.media.mit.edu/?q=newslettercriteria`, which
    opens the course site and sends that query to the Course Agent as the student's first
    message; the agent answers from the course FAQ (see below).
-3. Every other student who posted work that week, with one sentence on what they built and a
-   link to their site. The scorer marks a submission `blank` when it is nothing beyond an
-   untouched or lightly edited starter site, a welcome or about page, or an empty folder. Blank
-   submissions are left off the list and are never featured; a plan, a concept page, or a
-   partial or broken build still counts. The instructor scoreboard flags blank rows.
+3. Every other student who posted work that week, with one sentence on what they built that
+   week and a link to that week's post. Both the list and the sentence are about the week, not
+   the site: a student is considered only when something points at this week's work (files in
+   the week's folder, commits in the week's window, or site files named for the week), so a
+   site that was not touched this week does not put its owner on the list. The scorer then
+   marks a submission `blank` when the evidence shows nothing made for this week's assignment:
+   an untouched or lightly edited starter site, a welcome or about page, an empty folder, a
+   placeholder post, or only earlier weeks' work and final-project ideas. Blank submissions are
+   left off the list and are never featured; a plan, a concept page, or a partial or broken
+   build still counts. The instructor scoreboard flags blank rows.
 4. A closing quote. Preferably a line from a student's own post that week, featured or not: the
    scoring pass asks each project for up to three sentences with personality (surprising, funny,
    candid, vivid; never a definition), code verifies each appears verbatim in that student's
@@ -72,8 +92,9 @@ Every issue follows the same skimmable shape:
    then the course line (`MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026`), and
    last the class website, `cognitive-agents.media.mit.edu`.
 
-The email subject is `The Class Runtime from MAS.S60`. Each message is sent as plain text with an
-HTML alternative. The HTML keeps the course site's black ground and ivory Helvetica, with
+The email subject is `NEWSLETTER_SUBJECT` followed by the issue number the masthead prints, for
+example `The Class Runtime from MAS.S60 · Issue 02`. It is fixed when the draft is made and
+stored with the issue. Each message is sent as plain text with an HTML alternative. The HTML keeps the course site's black ground and ivory Helvetica, with
 section labels ("The assignment", "How the week went") set small, sentence-case and medium
 weight. Secondary text is near-white rather than the site's muted grey, which reads as a
 watermark in an inbox; levels are separated by size and weight instead of by dimming. The
@@ -142,7 +163,8 @@ both together.
 
 For each featured build the finder opens the student's site in headless Chromium (the same
 Playwright dependency the agent's browser uses; `BROWSER_EXECUTABLE_PATH` is honored when it
-exists), follows same-site links that name the week to the student's post, and measures the visual
+exists), goes to the student's post (the one evidence collection found, then same-site links that
+name the week), and measures the visual
 elements rendered there: images, SVG figures, canvases, and videos. Before measuring, the page
 settles the way it would for a visitor: lazy images are loaded by scrolling, web fonts are awaited,
 and images that failed to load are skipped. Visible elements at least 280 by 140 CSS pixels with a
@@ -174,21 +196,41 @@ be inspected is skipped and noted in the draft log; the highlight is still writt
 | Links, project list, quote, footer, HTML escaping, image fetching and re-encoding | Platform code; the model cannot add links, addresses, or image URLs |
 | Whether anything is emailed, and to whom | The instructor, at `send` time |
 
-The model receives only repository names, derived labels, deployed site URLs, commit subjects,
-bounded Markdown/text documents from `weekly_builds/weekNN/`, and bounded deployed site text.
+The model receives only the week's assignment text, repository names, derived labels, deployed
+site URLs, commit subjects,
+bounded Markdown/text documents and notebook prose from `weekly_builds/weekNN/` and from site
+files named for the week, and bounded deployed site text.
 It does not receive credentials, student email addresses, or account data.
 
 ## Data sources and bounds
 
 For each course repository the collector reads, through the existing catalog:
 
-- the recursive tree, to count files under `weekly_builds/weekNN/` and `website/`;
-- up to six `.md`, `.txt`, or `.rst` documents from that week's folder, shallowest and README
-  first, each capped at 4,000 characters and 9,000 characters per project;
+- the week's assignment record: the published record under `ASSIGNMENT_DATA_PATH` (default
+  `var/assignments/`, one file per assignment, directly or one folder down) whose deadline falls
+  inside the week's window, capped at 14,000 characters. This is the deployment's own store
+  (`docs/ASSIGNMENTS.md`), so a draft made on the server reads the live record. A draft made
+  anywhere else must copy the server's `var/assignments/` first; the draft log names the
+  record and revision it used, or says that none was found;
+- the recursive tree, to count files under `weekly_builds/weekNN/` and `website/`, and to
+  note the `website/` files whose path names the week (`rooms/week03.html`,
+  `docs/week03/part-1.md`);
+- up to six `.md`, `.txt`, or `.rst` documents and `.ipynb` notebooks, the week's folder first
+  (shallowest and README first) and then the site files named for the week, each capped at
+  4,000 characters and 9,000 characters per project. Only a notebook's Markdown cells are
+  read, by scanning, so a notebook the catalog cut off at its size cap still yields its prose;
 - the 30 most recent commits, filtered to the week's window (class day through the day before the
   next class, in `NEWSLETTER_TIMEZONE`);
 - the deployed site's readable text, capped at 2,500 characters, using the same public-network
-  fetch rules as the agent's web tools.
+  fetch rules as the agent's web tools;
+- the student's post for the week, capped at 5,000 characters: the first same-site link in the
+  served HTML that names the week. When the served HTML names none, the published page named
+  for the week among the site's files is used (a week folder's own index first, then the
+  shallowest path), because a page can exist without the home page linking it. Failing that,
+  because the site's script builds its menu or fills in its posts, the site root is opened in
+  headless Chromium and the rendered link is followed; on a single-page site that link is a
+  `#week-NN` section the script opens. The post's visible text is read there. That post is
+  also the student's link in the issue, and the page the image finder starts from.
 
 Credential-like paths are refused by the catalog before any content is requested. One unreadable
 repository or site is noted in the evidence and does not stop the draft.

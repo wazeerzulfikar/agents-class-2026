@@ -1,5 +1,6 @@
 """Instructor-run weekly newsletter built from read-only student repository evidence."""
 
+from .assignment import AssignmentBrief, load_assignment_brief
 from .collect import EvidenceLimits, WeeklyEvidenceCollector, project_label
 from .compose import (
     EDITORIAL_MARKER,
@@ -30,10 +31,12 @@ from .images import (
     ImageCandidate,
     ImageJudge,
     PlaywrightImageFinder,
+    RenderedPost,
     build_judge_prompt,
     discover_week_anchor,
     discover_week_pages,
     filter_candidates,
+    read_rendered_week_post,
 )
 from .jobs import NewsletterJobRunner
 from .lecture import (
@@ -59,6 +62,7 @@ from .models import (
     ProjectScore,
     WeeklyDigest,
     issue_id_for,
+    issue_subject,
 )
 from .quotes import PIONEER_QUOTES, choose_quote
 from .render import cid_image_source, relative_image_source, render_html, render_text
@@ -102,6 +106,7 @@ __all__ = [
     "SCORE_SCHEMA",
     "SCORE_WEIGHTS",
     "SCORING_MARKER",
+    "AssignmentBrief",
     "CommitSummary",
     "CourseWeek",
     "Delivery",
@@ -139,6 +144,7 @@ __all__ = [
     "ProjectEvidence",
     "ProjectLink",
     "ProjectScore",
+    "RenderedPost",
     "RubricCriterion",
     "ScreenshotError",
     "SiteScreenshot",
@@ -161,10 +167,12 @@ __all__ = [
     "encode_jpeg",
     "filter_candidates",
     "issue_id_for",
+    "issue_subject",
     "issue_summary",
     "job_summary",
     "learning_goals_from_syllabus",
     "link_resolves",
+    "load_assignment_brief",
     "load_lecture_notes",
     "load_schedule",
     "normalize_recipients",
@@ -172,6 +180,7 @@ __all__ = [
     "parse_score",
     "project_label",
     "quote_candidates",
+    "read_rendered_week_post",
     "relative_image_source",
     "render_html",
     "render_text",

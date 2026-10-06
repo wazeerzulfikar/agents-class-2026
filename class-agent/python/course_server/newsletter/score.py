@@ -95,11 +95,13 @@ RUBRIC: tuple[RubricCriterion, ...] = (
     ),
 )
 SCORE_WEIGHTS: dict[str, float] = {criterion.key: criterion.weight for criterion in RUBRIC}
-# A blank submission is left off the issue's list of builds and is never featured.
+# A blank submission is left off the issue's list of builds and is never featured. The rule is
+# about this week: a site full of earlier weeks' work is still blank for a week with nothing new.
 BLANK_RULE = (
-    "true only when the submission has nothing beyond an untouched or lightly edited starter "
-    "site, a welcome or about page, or an empty folder. Anything more, even a plan, a concept "
-    "page, or a partial or broken build, is false."
+    "true only when the evidence shows nothing made for this week's assignment: an untouched "
+    "or lightly edited starter site, a welcome or about page, an empty folder, a placeholder "
+    "post, or only work from earlier weeks and final-project ideas. Anything made for this "
+    "week, even a plan, a concept page, or a partial or broken build, is false."
 )
 if abs(sum(SCORE_WEIGHTS.values()) - 1.0) > 1e-9:
     raise RuntimeError("Newsletter rubric weights must sum to 1.")
@@ -126,10 +128,12 @@ SCORE_SCHEMA: dict[str, object] = {
             "type": "string",
             "description": (
                 "One plain sentence, at most 18 words, telling a classmate who has never seen "
-                "the project what it does for a person (name it if it has a name). Everyday "
-                "words only: no acronyms, code names, or jargon. Do not include the student's "
-                "name; no mention of evidence, assessment, or what is missing. If only a site "
-                "exists, say what the site is."
+                "this week's build what it does for a person (name it if it has a name). "
+                "Everyday words only: no acronyms, code names, or jargon. Do not include the "
+                "student's name; no mention of evidence, assessment, or what is missing. "
+                "Describe only what was made for this week's assignment, never the website "
+                "that holds it or work from an earlier week. If nothing was made for this "
+                "week, say so plainly."
             ),
         },
         "went_well": {
@@ -188,7 +192,9 @@ def build_score_system_prompt(branding: NewsletterBranding) -> str:
         + "Be strict and consistent: 5 is an ordinary complete submission, 8 or more is "
         "exceptional, and evidence-free claims do not count.\n"
         "Also write, in plain language for the class: `built`, one sentence (at most 18 words) "
-        "saying what the student built, naming the project if it has a name; `went_well` and "
+        "saying what the student built for this week's assignment, naming the build if it has "
+        "a name. A course site usually holds several weeks; describe this week's build, not "
+        "the site and not an earlier week's work. Then `went_well` and "
         "`struggled`, each at most 25 words, describing what worked and where the student had "
         "difficulty or left gaps, so an editor can summarize the week. Refer to the student by "
         "the label. Finally, `quotes`: up to three passages from the student's own prose that "

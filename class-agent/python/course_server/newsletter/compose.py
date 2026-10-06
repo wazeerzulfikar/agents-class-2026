@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -18,8 +18,14 @@ import httpx
 from openai import OpenAI, OpenAIError
 from pydantic import SecretStr, ValidationError
 
+from .assignment import AssignmentBrief
 from .lecture import LectureNotes
 from .models import (
+    MAX_ASK_AROUND,
+    MAX_ASK_AROUND_NAMES,
+    MAX_BUILD_GROUPS,
+    AskAround,
+    BuildGroup,
     Highlight,
     NewsletterBranding,
     NewsletterCopy,
@@ -51,8 +57,44 @@ EDITORIAL_SCHEMA: dict[str, object] = {
                 "or 0 if none is good enough to close the issue."
             ),
         },
+        "groups": {
+            "type": "array",
+            "description": (
+                "The approaches the first paragraph found, in the order it mentions them: a "
+                "heading of two to five plain words naming the approach, and the numbers of "
+                "the submissions that took it. Every submission appears under exactly one "
+                "heading; a last heading takes the ones that fit nowhere else."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "heading": {"type": "string"},
+                    "submissions": {"type": "array", "items": {"type": "integer"}},
+                },
+                "required": ["heading", "submissions"],
+                "additionalProperties": False,
+            },
+        },
+        "ask_around": {
+            "type": "array",
+            "description": (
+                "Up to three blockers from the second paragraph that some submission clearly "
+                "got past: each a short question a stuck classmate would ask, ending in a "
+                "question mark, and the numbers of one or two submissions whose went-well "
+                "notes show they got past exactly that. Empty when none did."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "submissions": {"type": "array", "items": {"type": "integer"}},
+                },
+                "required": ["question", "submissions"],
+                "additionalProperties": False,
+            },
+        },
     },
-    "required": ["headline", "editorial", "quote_choice"],
+    "required": ["headline", "editorial", "quote_choice", "groups", "ask_around"],
     "additionalProperties": False,
 }
 HIGHLIGHTS_SCHEMA: dict[str, object] = {
@@ -94,12 +136,26 @@ MAX_SENTENCE_WORDS = 26
 MIN_READING_EASE = 50.0
 MIN_HIGHLIGHT_READING_EASE = 50.0
 # ALL_CAPS tokens, snake_case, and file names read as code to a classmate.
+# The first paragraph is a synthesis; builds may appear only as a few examples of an approach.
+MAX_EXAMPLE_LINKS = 3
+MAX_EXAMPLE_SENTENCES = 2
+# A headline is tied to its week by sharing a term with the assignment's title. Terms are the
+# title's own words of at least four letters, minus words that carry no subject.
+_TOPIC_TERM_MIN = 4
+_TOPIC_STEM = 6
+_TOPIC_EXAMPLES = 6
+_TOPIC_FILLER = frozenset(
+    {"about", "course", "from", "into", "that", "their", "this", "week", "what", "with", "your"}
+)
 _CODE_LIKE = re.compile(r"\b(?:[A-Z]{2,}_[A-Z_]+|[a-z]+_[a-z_]+|\w+\.(?:py|md|json|html|js|txt))\b")
 # Staff vocabulary that must not leak into student-facing copy. Kept narrow: words like
 # "score" are legitimate when describing a build that scores things.
 _BANNED_WORDS = re.compile(r"\b(brief|rubric)\b", re.IGNORECASE)
 # Brevity is part of the format; the model is re-prompted with the exact overrun.
 WORD_LIMITS: dict[str, int] = {"headline": 12, "description": 48}
+# An approach heading is a label over a few names; a blocker question is one short line.
+MAX_GROUP_HEADING_WORDS = 5
+MAX_ASK_AROUND_WORDS = 10
 EDITORIAL_WORDS = (100, 165)
 
 
@@ -127,6 +183,8 @@ class EditorialDraft:
     headline: str
     editorial: str
     quote_choice: int
+    groups: tuple[BuildGroup, ...] = ()
+    ask_around: tuple[AskAround, ...] = ()
 
 
 _CHOICE = re.compile(r'"choice"\s*:\s*(\d+)')
@@ -252,18 +310,26 @@ def build_editorial_system_prompt(branding: NewsletterBranding) -> str:
         f"{EDITORIAL_MARKER} {_voice(branding)}\n\n"
         "Task: from the staff notes on every student's submission, write the issue's headline "
         "and editorial, and pick the closing quote.\n"
-        "- headline: at most 12 words, a pun or playful turn on this week's assignment itself "
-        "(what the class was asked to build), not a generic line about highlights.\n"
+        "- headline: at most 12 words, a pun or playful turn on the main topic of this week's "
+        'assignment as the class received it (the section "The assignment as given to the '
+        'class"; its title names the topic), so that someone who reads only the headline knows '
+        "what the class was asked to explore. It uses at least one of that title's own terms. "
+        "Never a generic line about highlights.\n"
         "- editorial: at most 150 words (count them; between 110 and 150), exactly two short "
         "paragraphs separated by a blank line, speaking to the class directly. Read the lecture "
         "slides for the week the assignment was given and judge the submissions against them.\n"
-        "  First paragraph: what generally went well, and which ideas from the lecture the class "
-        "clearly absorbed. Have fun with it and be concrete: point at actual builds by what they "
-        "are (a rolling-ball physics world, a Downloads-folder renamer, a town of pixel "
-        "townspeople) and use the lecture's own phrases, so it reads like a note from someone "
-        "who looked at everything. Whenever you refer to a specific build, wrap that phrase in a "
-        "Markdown link to that submission's site URL from the notes, for example [a rolling-ball "
-        "physics world](https://...), so readers can jump to it.\n"
+        "  First paragraph: a synthesis of how the class answered the assignment, not a tour of "
+        "builds. Read every submission's notes, find the two or three approaches that recurred, "
+        "and say what they were. In a week on interfaces, for example: which form factors "
+        "people chose (a phone, a watch, glasses), what they let the agent notice, and when it "
+        "speaks up or stays quiet. Group builds by what they share, and say which ideas from "
+        "the assignment and lecture the class clearly absorbed. Never give a build a sentence "
+        "of its own: the highlights and the full list below already describe each one. To make "
+        "an approach concrete you may name builds as examples inside a sentence about that "
+        "approach, each wrapped in a Markdown link to that submission's site URL from the "
+        "notes, for example: several of you moved the agent off the screen, into [smart "
+        f"glasses](https://...) and [a bedside voice](https://...). Use at most "
+        f"{MAX_EXAMPLE_LINKS} such links, in at most {MAX_EXAMPLE_SENTENCES} sentences.\n"
         "  Second paragraph: what to practice next. Name the blind spots, meaning ideas the "
         "lecture emphasized that the submissions largely missed, skipped, or misapplied, and the "
         "common blockers, framed constructively in terms of the learning goals: what the gap "
@@ -290,7 +356,19 @@ def build_editorial_system_prompt(branding: NewsletterBranding) -> str:
         "line about an unrelated subject loses to a plainer line about agents. Reject "
         "definitions, restatements of the assignment, fragments that depend on missing context, "
         "and anything a textbook could have said; answer 0 rather than pick a bland or "
-        "off-topic one."
+        "off-topic one.\n"
+        "- groups: the issue ends with a list of every build, grouped under the approaches "
+        "your first paragraph found, so that classmates who took the same path find each "
+        'other. Give each approach a heading of two to five plain words ("Maps and traces", '
+        '"Approval before changes", "Voice and wearables"), no jargon, and put every '
+        'submission number under exactly one heading. A last heading such as "Other paths" '
+        "takes the ones that fit nowhere else. Use between two and five headings.\n"
+        "- ask_around: under the second paragraph the issue points a stuck classmate to people "
+        "who got past a blocker (code fills in their names). For up to three of the blockers "
+        "that paragraph names, write the question a stuck classmate would ask, at most ten "
+        'words ending in a question mark ("Stuck on when the agent should speak?"), and list '
+        "the one or two submissions whose went-well notes show they got past exactly that. "
+        "Point at a submission only when its notes say so; otherwise leave the list empty."
     )
 
 
@@ -312,7 +390,11 @@ def build_highlights_system_prompt(branding: NewsletterBranding) -> str:
         "an acronym, a code identifier, a file name, or a project-internal label as if the "
         "reader already knows it. Never restate the assignment's wording and never reuse a "
         "sentence across highlights. An image of the build appears above the text, so do not "
-        "describe what it looks like."
+        "describe what it looks like.\n"
+        "- The student's name is printed beside the headline, so a sentence never opens with it "
+        'as if the student were the tool ("Ada helps you..."). The subject is the build: its '
+        'own name when it has a plain one, otherwise "this build" or a plain phrase for what '
+        'it is. A possessive ("Ada\'s agent") is fine.'
     )
 
 
@@ -321,7 +403,8 @@ def describe_project(project: ProjectEvidence, *, status: str) -> str:
     lines.append(f"deployed site: {project.site_url or 'none'}")
     lines.append(
         f"activity: {project.week_file_count} files in this week's build folder, "
-        f"{project.commit_count} commits in the window, {project.site_file_count} website files"
+        f"{project.commit_count} commits in the window, {project.site_file_count} website files "
+        f"({project.week_site_file_count} named for this week)"
     )
     if project.commits:
         lines.append("commit subjects:")
@@ -356,6 +439,26 @@ def _week_header(digest: WeeklyDigest) -> list[str]:
     ]
 
 
+def editorial_submissions(
+    digest: WeeklyDigest, scores: Sequence[ProjectScore]
+) -> tuple[tuple[int, ProjectEvidence, ProjectScore], ...]:
+    """The numbered, anonymous submissions the editorial reads: active projects with a score.
+
+    Numbers follow the active list (a blank project keeps its number but is left out), and
+    the same numbers map the model's groups and ask-around picks back to projects.
+    """
+
+    scored = {score.project_id: score for score in scores}
+    numbered: list[tuple[int, ProjectEvidence, ProjectScore]] = []
+    for index, project in enumerate(
+        (project for project in digest.projects if project.active), start=1
+    ):
+        score = scored.get(project.project_id)
+        if score is not None and not score.blank:
+            numbered.append((index, project, score))
+    return tuple(numbered)
+
+
 def quote_candidates(
     digest: WeeklyDigest, scores: Sequence[ProjectScore]
 ) -> tuple[tuple[str, str, str], ...]:
@@ -374,13 +477,23 @@ def build_editorial_user_prompt(
     scores: Sequence[ProjectScore],
     *,
     lecture: LectureNotes | None = None,
+    assignment: AssignmentBrief | None = None,
     feedback: tuple[str, ...] = (),
 ) -> str:
     """Notes are anonymized and uncounted so the editorial cannot name or tally students."""
 
-    scored = {score.project_id: score for score in scores}
-    active = [project for project in digest.projects if project.active]
     sections = _week_header(digest)
+    if assignment is not None:
+        suffix = " (excerpt)" if assignment.truncated else ""
+        sections.append(
+            f"## The assignment as given to the class{suffix}\n"
+            f"Title: {assignment.title}\n\n{assignment.text}"
+        )
+    else:
+        sections.append(
+            "## The assignment as given to the class\n"
+            "No assignment record covers this week; go by the assignment line above."
+        )
     if lecture is not None:
         suffix = " (excerpt)" if lecture.truncated else ""
         sections.append(
@@ -398,10 +511,7 @@ def build_editorial_user_prompt(
     sections.append(
         "## Staff notes per submission (anonymous: what was built / went well / struggled)"
     )
-    for index, project in enumerate(active, start=1):
-        score = scored.get(project.project_id)
-        if score is None:
-            continue
+    for index, project, score in editorial_submissions(digest, scores):
         link = project.visitor_url
         site = f" / site: {link}" if link else ""
         sections.append(
@@ -542,6 +652,31 @@ def _is_project_link(url: str, project_urls: Sequence[str]) -> bool:
     return False
 
 
+def _synthesis_problems(paragraph: str, *, project_urls: Sequence[str]) -> list[str]:
+    """The first paragraph synthesizes approaches; builds appear only as a few examples."""
+
+    def build_links(text: str) -> int:
+        return sum(
+            1 for _, url in MARKDOWN_LINK.findall(text) if _is_project_link(url, project_urls)
+        )
+
+    problems: list[str] = []
+    total = build_links(paragraph)
+    if total > MAX_EXAMPLE_LINKS:
+        problems.append(
+            f"the first paragraph links {total} builds; describe the approaches the class "
+            f"shared and link at most {MAX_EXAMPLE_LINKS} builds as examples"
+        )
+    pointed = sum(1 for sentence in _sentences(paragraph) if build_links(sentence))
+    if pointed > MAX_EXAMPLE_SENTENCES:
+        problems.append(
+            f"{pointed} sentences in the first paragraph point at a build; that reads as a "
+            "list of builds. Write about approaches shared across builds and keep examples to "
+            f"at most {MAX_EXAMPLE_SENTENCES} sentences"
+        )
+    return problems
+
+
 def _next_steps_problems(paragraph: str, *, project_urls: Sequence[str]) -> list[str]:
     """The second paragraph speaks to everyone: no particular build, no comma-dense sentences."""
 
@@ -561,6 +696,48 @@ def _next_steps_problems(paragraph: str, *, project_urls: Sequence[str]) -> list
     return problems
 
 
+def topic_terms(topic: str) -> tuple[str, ...]:
+    """The subject-bearing words of an assignment title (or topic line), in order."""
+
+    terms: list[str] = []
+    for word in re.findall(r"[a-z]+", topic.casefold()):
+        if len(word) >= _TOPIC_TERM_MIN and word not in _TOPIC_FILLER and word not in terms:
+            terms.append(word)
+    return tuple(terms)
+
+
+def _root(word: str) -> str:
+    """A word without its plural or "-ing" ending: "memories" and "learning" become roots."""
+
+    if word.endswith("ies") and len(word) > 4:
+        word = f"{word[:-3]}y"
+    elif word.endswith("s") and not word.endswith("ss"):
+        word = word[:-1]
+    return word[:-3] if word.endswith("ing") and len(word) > 6 else word
+
+
+def _same_term(left: str, right: str) -> bool:
+    """Equal, or forms of one word ("delegation" and "delegate"), judged by a shared opening.
+
+    A short word never matches a longer one it merely begins ("over" and "overreliance").
+    """
+
+    left, right = _root(left), _root(right)
+    shared = next(
+        (index for index, (a, b) in enumerate(zip(left, right, strict=False)) if a != b),
+        min(len(left), len(right)),
+    )
+    return shared >= min(_TOPIC_STEM, max(len(left), len(right)))
+
+
+def headline_names_topic(headline: str, topic: str) -> bool:
+    """Whether the headline uses one of the subject's terms; true when the subject has none."""
+
+    terms = topic_terms(topic)
+    words = [word for word in re.findall(r"[a-z]+", headline.casefold()) if len(word) >= 4]
+    return not terms or any(_same_term(word, term) for word in words for term in terms)
+
+
 def validate_editorial(
     headline: str,
     editorial: str,
@@ -569,6 +746,7 @@ def validate_editorial(
     quotes: Sequence[str] = (),
     project_urls: Sequence[str] = (),
     link_checker: LinkChecker | None = None,
+    topic: str = "",
 ) -> tuple[str, ...]:
     """Project links (to roster sites) are unlimited; external references stay bounded."""
 
@@ -576,6 +754,11 @@ def validate_editorial(
     if _word_count(headline) > WORD_LIMITS["headline"]:
         problems.append(
             f"headline has {_word_count(headline)} words; the limit is {WORD_LIMITS['headline']}"
+        )
+    if not headline_names_topic(headline, topic):
+        problems.append(
+            "headline must reflect the main topic of this week's assignment and use one of "
+            f"its own terms (for example: {', '.join(topic_terms(topic)[:_TOPIC_EXAMPLES])})"
         )
     links = MARKDOWN_LINK.findall(editorial)
     prose = MARKDOWN_LINK.sub(r"\1", editorial)
@@ -605,6 +788,7 @@ def validate_editorial(
             f"write exactly two paragraphs separated by a blank line (found {len(paragraphs)})"
         )
     else:
+        problems += _synthesis_problems(paragraphs[0], project_urls=project_urls)
         problems += _next_steps_problems(paragraphs[1], project_urls=project_urls)
     external = [url for _, url in links if url.rstrip("/") not in known]
     if len(external) > MAX_EDITORIAL_LINKS:
@@ -618,8 +802,152 @@ def validate_editorial(
     return tuple(problems)
 
 
+def _names_student(value: str, names: Sequence[str]) -> str | None:
+    """The first student name a run of model copy mentions, if any."""
+
+    for name in names:
+        if len(name) >= 4 and re.search(rf"\b{re.escape(name)}\b", value, re.IGNORECASE):
+            return name
+    return None
+
+
+def _submission_numbers(raw: object, *, owner: str) -> tuple[list[int], list[str]]:
+    """The submission numbers a group or ask-around entry lists, or why they are unusable."""
+
+    if not isinstance(raw, list) or not all(isinstance(item, int) for item in raw):
+        return [], [f"{owner} must list submission numbers"]
+    return list(cast(list[int], raw)), []
+
+
+def parse_groups(
+    raw: object,
+    *,
+    submissions: Mapping[int, str],
+    names: Sequence[str] = (),
+) -> tuple[tuple[BuildGroup, ...], tuple[str, ...]]:
+    """Map the model's approach groups to project ids; every submission lands in exactly one."""
+
+    if not submissions:
+        return (), ()
+    if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
+        return (), ("groups must be a list of headings with submission numbers",)
+    items = cast(list[dict[str, object]], raw)
+    problems: list[str] = []
+    if not items:
+        problems.append("groups: put every submission under an approach heading")
+    if len(items) > MAX_BUILD_GROUPS:
+        problems.append(f"groups has {len(items)} headings; the limit is {MAX_BUILD_GROUPS}")
+    groups: list[BuildGroup] = []
+    seen_headings: set[str] = set()
+    placed: dict[int, str] = {}
+    for item in items:
+        heading = str(item.get("heading", "")).strip()
+        if not heading:
+            problems.append("every group needs a heading")
+            continue
+        problems += _text_problems(heading, field_name="heading", owner=f'group "{heading}"')
+        if _word_count(heading) > MAX_GROUP_HEADING_WORDS:
+            problems.append(
+                f'group heading "{heading}" has {_word_count(heading)} words; the limit is '
+                f"{MAX_GROUP_HEADING_WORDS}"
+            )
+        name = _names_student(heading, names)
+        if name is not None:
+            problems.append(f'group heading "{heading}" must not name a student ("{name}")')
+        if heading.casefold() in seen_headings:
+            problems.append(f'group heading "{heading}" is used twice')
+        seen_headings.add(heading.casefold())
+        numbers, number_problems = _submission_numbers(
+            item.get("submissions"), owner=f'group "{heading}"'
+        )
+        problems += number_problems
+        if not numbers and not number_problems:
+            problems.append(f'group "{heading}" lists no submissions; drop it or fill it')
+        for number in numbers:
+            if number not in submissions:
+                problems.append(
+                    f'group "{heading}" lists submission {number}, which does not exist'
+                )
+            elif number in placed:
+                problems.append(
+                    f'submission {number} is under both "{placed[number]}" and "{heading}"; '
+                    "put each submission under exactly one heading"
+                )
+            else:
+                placed[number] = heading
+        members = tuple(submissions[number] for number in numbers if submissions.get(number))
+        if members:
+            groups.append(BuildGroup(heading=heading, project_ids=members))
+    missing = sorted(number for number in submissions if number not in placed)
+    if items and missing:
+        problems.append(
+            "every submission must be under a heading; missing: "
+            + ", ".join(str(number) for number in missing)
+        )
+    return tuple(groups), tuple(problems)
+
+
+def parse_ask_around(
+    raw: object,
+    *,
+    submissions: Mapping[int, str],
+    names: Sequence[str] = (),
+) -> tuple[tuple[AskAround, ...], tuple[str, ...]]:
+    """Map the model's blocker questions to the project ids of those who got past them."""
+
+    if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
+        return (), ("ask_around must be a list of questions with submission numbers",)
+    items = cast(list[dict[str, object]], raw)
+    problems: list[str] = []
+    if len(items) > MAX_ASK_AROUND:
+        problems.append(f"ask_around has {len(items)} entries; the limit is {MAX_ASK_AROUND}")
+    entries: list[AskAround] = []
+    seen: set[str] = set()
+    for item in items:
+        question = str(item.get("question", "")).strip()
+        if not question:
+            problems.append("every ask_around entry needs a question")
+            continue
+        owner = f'ask_around "{question}"'
+        problems += _text_problems(question, field_name="question", owner=owner)
+        if not question.endswith("?"):
+            problems.append(f"{owner} must be a question ending in a question mark")
+        if _word_count(question) > MAX_ASK_AROUND_WORDS:
+            problems.append(
+                f"{owner} has {_word_count(question)} words; the limit is {MAX_ASK_AROUND_WORDS}"
+            )
+        name = _names_student(question, names)
+        if name is not None:
+            problems.append(f'{owner} must not name a student ("{name}")')
+        if question.casefold() in seen:
+            problems.append(f"{owner} is asked twice")
+        seen.add(question.casefold())
+        numbers, number_problems = _submission_numbers(item.get("submissions"), owner=owner)
+        problems += number_problems
+        unique = list(dict.fromkeys(numbers))
+        if not 1 <= len(unique) <= MAX_ASK_AROUND_NAMES:
+            problems.append(f"{owner} must point at one or two submissions (got {len(unique)})")
+        for number in unique:
+            if number not in submissions:
+                problems.append(f"{owner} lists submission {number}, which does not exist")
+        members = tuple(submissions[number] for number in unique if number in submissions)
+        if members:
+            entries.append(AskAround(question=question, project_ids=members[:MAX_ASK_AROUND_NAMES]))
+    return tuple(entries), tuple(problems)
+
+
+def _opens_with_student(description: str, label: str) -> bool:
+    """Whether a sentence makes the student its subject ("Ada helps you..."), not the build."""
+
+    opener = re.compile(rf"{re.escape(label)}(?!['\u2019\w])", re.IGNORECASE)
+    return any(opener.match(sentence) for sentence in _sentences(description))
+
+
 def validate_highlights(
-    highlights: Sequence[Highlight], *, selected: Sequence[str]
+    highlights: Sequence[Highlight],
+    *,
+    selected: Sequence[str],
+    labels: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
     """Deterministic checks the model cannot override; returns problems to fix."""
 
@@ -661,6 +989,12 @@ def validate_highlights(
                 f"{highlight.project_id} description uses the internal name "
                 f'"{code_like.group(0)}"; say it in plain words instead'
             )
+        label = (labels or {}).get(highlight.project_id)
+        if label and _opens_with_student(highlight.description, label):
+            problems.append(
+                f'{highlight.project_id} description opens a sentence with "{label}" as if the '
+                'student were the tool; name the build or write "this build" instead'
+            )
     return tuple(problems)
 
 
@@ -675,6 +1009,7 @@ def compose_editorial(
     *,
     branding: NewsletterBranding,
     lecture: LectureNotes | None = None,
+    assignment: AssignmentBrief | None = None,
     link_checker: LinkChecker | None = link_resolves,
     max_attempts: int = 4,
 ) -> EditorialDraft:
@@ -689,7 +1024,7 @@ def compose_editorial(
             writer.write(
                 system_prompt=system_prompt,
                 user_prompt=build_editorial_user_prompt(
-                    digest, scores, lecture=lecture, feedback=feedback
+                    digest, scores, lecture=lecture, assignment=assignment, feedback=feedback
                 ),
                 schema=EDITORIAL_SCHEMA,
             )
@@ -700,6 +1035,16 @@ def compose_editorial(
         choice = raw_choice if isinstance(raw_choice, int) else 0
         if not headline or not editorial:
             raise NewsletterCompositionError("The model returned an empty headline or editorial.")
+        submissions = {
+            number: project.project_id
+            for number, project, _ in editorial_submissions(digest, scores)
+        }
+        groups, group_problems = parse_groups(
+            payload.get("groups", []), submissions=submissions, names=names
+        )
+        ask_around, ask_problems = parse_ask_around(
+            payload.get("ask_around", []), submissions=submissions, names=names
+        )
         feedback = validate_editorial(
             headline,
             editorial,
@@ -712,11 +1057,25 @@ def compose_editorial(
                 if url is not None
             ],
             link_checker=link_checker,
+            # The assignment's own title names its main topic; without a record, the
+            # schedule's assignment line and topic stand in.
+            topic=(
+                assignment.title
+                if assignment is not None
+                else f"{digest.week.tutorial} {digest.week.topic}"
+            ),
         )
+        feedback += group_problems + ask_problems
         if not 0 <= choice <= candidate_count:
             feedback += (f"quote_choice must be between 0 and {candidate_count}",)
         if not feedback:
-            return EditorialDraft(headline=headline, editorial=editorial, quote_choice=choice)
+            return EditorialDraft(
+                headline=headline,
+                editorial=editorial,
+                quote_choice=choice,
+                groups=groups,
+                ask_around=ask_around,
+            )
     raise NewsletterCompositionError("The editorial broke platform rules: " + "; ".join(feedback))
 
 
@@ -751,7 +1110,11 @@ def compose_highlights(
             )
         except (ValidationError, TypeError) as error:
             raise NewsletterCompositionError("The highlights did not match the schema.") from error
-        feedback = validate_highlights(highlights, selected=selected)
+        feedback = validate_highlights(
+            highlights,
+            selected=selected,
+            labels={project.project_id: project.label for project in digest.projects},
+        )
         if not feedback:
             return highlights
     raise NewsletterCompositionError(
@@ -767,17 +1130,30 @@ def compose_newsletter(
     selected: Sequence[str],
     branding: NewsletterBranding,
     lecture: LectureNotes | None = None,
+    assignment: AssignmentBrief | None = None,
     link_checker: LinkChecker | None = link_resolves,
 ) -> tuple[NewsletterCopy, tuple[str, str, str] | None]:
     """The issue's copy plus the chosen student quote as (project_id, label, text), if any."""
 
     draft = compose_editorial(
-        digest, scores, writer, branding=branding, lecture=lecture, link_checker=link_checker
+        digest,
+        scores,
+        writer,
+        branding=branding,
+        lecture=lecture,
+        assignment=assignment,
+        link_checker=link_checker,
     )
     highlights = compose_highlights(digest, writer, selected=selected, branding=branding)
     candidates = quote_candidates(digest, scores)
     chosen = candidates[draft.quote_choice - 1] if draft.quote_choice > 0 else None
     return (
-        NewsletterCopy(headline=draft.headline, editorial=draft.editorial, highlights=highlights),
+        NewsletterCopy(
+            headline=draft.headline,
+            editorial=draft.editorial,
+            highlights=highlights,
+            groups=draft.groups,
+            ask_around=draft.ask_around,
+        ),
         chosen,
     )

@@ -21,7 +21,7 @@ from course_server.web_search import fetch_public_webpage
 
 from .collect import WeeklyEvidenceCollector, find_week_page, week_page_is_fragment
 from .compose import NewsletterCompositionError, OpenAINewsletterWriter
-from .images import PlaywrightImageFinder
+from .images import PlaywrightImageFinder, read_rendered_week_post
 from .models import NewsletterIssue, NewsletterSettings
 from .pdf import export_pdf
 from .render import render_html, render_text
@@ -116,11 +116,16 @@ def _drafting_service(values: Mapping[str, str], *, log: TextIO) -> NewsletterSe
         excluded_repositories=agent_settings.github_excluded_repositories,
         roster_cache_ttl_seconds=agent_settings.github_roster_cache_ttl_seconds,
     )
+    configured = agent_settings.browser_executable_path
+    executable = configured if configured is not None and configured.is_file() else None
     collector = WeeklyEvidenceCollector(
         catalog,
         repository_prefix=agent_settings.github_repository_prefix,
         read_site=fetch_public_webpage,
         find_week_page=find_week_page,
+        render_week_page=lambda site_url, week: read_rendered_week_post(
+            site_url, week, executable_path=executable
+        ),
         is_fragment=week_page_is_fragment,
         log=lambda message: print(message, file=log),
     )
@@ -129,10 +134,9 @@ def _drafting_service(values: Mapping[str, str], *, log: TextIO) -> NewsletterSe
         api_key=agent_settings.model_api_key,
     )
     _WRITERS.append(writer)
-    executable = agent_settings.browser_executable_path
     image_finder = PlaywrightImageFinder(
         judge=writer.judge_images,
-        executable_path=executable if executable is not None and executable.is_file() else None,
+        executable_path=executable,
         log=lambda message: print(message, file=log),
     )
     return NewsletterService(

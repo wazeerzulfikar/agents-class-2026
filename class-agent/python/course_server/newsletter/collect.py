@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
+from urllib.parse import quote, urljoin
 
 from course_server.student_projects import (
     StudentProject,
@@ -17,17 +19,24 @@ from course_server.student_projects import (
 )
 
 from .images import (
+    RenderedPost,
     discover_week_anchor,
     discover_week_pages,
     is_html_fragment,
     static_anchors,
     static_html,
+    week_page_pattern,
 )
 from .models import CommitSummary, CourseWeek, ProjectDocument, ProjectEvidence
 
 WEEKLY_BUILDS_DIRECTORY = "weekly_builds"
 SITE_DIRECTORY = "website/"
 _DOCUMENT_SUFFIXES = (".md", ".txt", ".rst")
+_NOTEBOOK_SUFFIX = ".ipynb"
+_PAGE_SUFFIXES = (".html", ".htm")
+_INDEX_PAGE = "index.html"
+_NOTEBOOK_CELL = re.compile(r'"cell_type"\s*:\s*"(markdown|code|raw)"')
+_NOTEBOOK_SOURCE = re.compile(r'"source"\s*:\s*')
 _IGNORED_PATH_PARTS = frozenset({"node_modules", ".git", "__pycache__", "venv", ".venv"})
 _WHITESPACE = re.compile(r"[ \t\f\v]+")
 _BLANK_LINES = re.compile(r"\n{3,}")
@@ -43,6 +52,12 @@ class WeekPageFinder(Protocol):
     """Finds the student's post for the week from their site root, or None."""
 
     def __call__(self, site_url: str, week: CourseWeek) -> str | None: ...
+
+
+class WeekPageRenderer(Protocol):
+    """Finds and reads the week's post in a browser, for sites whose scripts build links."""
+
+    def __call__(self, site_url: str, week: CourseWeek) -> RenderedPost | None: ...
 
 
 class FragmentCheck(Protocol):
@@ -107,7 +122,62 @@ def _document_priority(path: str) -> tuple[int, int, str]:
 
 def _is_document(path: str) -> bool:
     name = path.rsplit("/", 1)[-1]
-    return name.casefold().endswith(_DOCUMENT_SUFFIXES) and not name.startswith(".")
+    return name.casefold().endswith((*_DOCUMENT_SUFFIXES, _NOTEBOOK_SUFFIX)) and not (
+        name.startswith(".")
+    )
+
+
+def notebook_prose(raw: str) -> str:
+    """The Markdown cells of a Jupyter notebook, in order.
+
+    Read by scanning rather than parsing the whole file, because the catalog caps file size
+    and a notebook cut off mid-cell is no longer valid JSON. A cell that was cut off is dropped.
+    """
+
+    decoder = json.JSONDecoder()
+    cells = list(_NOTEBOOK_CELL.finditer(raw))
+    prose: list[str] = []
+    for position, cell in enumerate(cells):
+        if cell.group(1) != "markdown":
+            continue
+        end = cells[position + 1].start() if position + 1 < len(cells) else len(raw)
+        source = _NOTEBOOK_SOURCE.search(raw, cell.end(), end)
+        if source is None:
+            continue
+        try:
+            value, _ = decoder.raw_decode(raw, source.end())
+        except ValueError:
+            break  # the file ends inside this cell
+        text = "".join(str(line) for line in value) if isinstance(value, list) else value
+        if isinstance(text, str) and text.strip():
+            prose.append(text.strip())
+    return "\n\n".join(prose)
+
+
+def week_site_pages(relative_paths: Sequence[str], *, site_url: str) -> list[str]:
+    """Published pages named for the week, as site URLs, the post itself first.
+
+    A site's home page may not link the post in its served HTML (a script builds the menu, or
+    the post opens inside the page), but the page is still a file in the site folder. A week
+    folder's own index, then the shallowest and shortest path, is taken to be the post.
+    """
+
+    pages = [path for path in relative_paths if path.casefold().endswith(_PAGE_SUFFIXES)]
+    pages.sort(
+        key=lambda path: (
+            path.count("/"),
+            0 if path.rsplit("/", 1)[-1].casefold() == _INDEX_PAGE else 1,
+            len(path),
+            path,
+        )
+    )
+    root = site_url if site_url.endswith("/") else f"{site_url}/"
+    urls: list[str] = []
+    for path in pages:
+        directory, _, name = path.rpartition("/")
+        visible = f"{directory}/" if name.casefold() == _INDEX_PAGE and directory else path
+        urls.append(urljoin(root, quote(visible)))
+    return urls
 
 
 def _parse_timestamp(value: object) -> datetime | None:
@@ -130,6 +200,7 @@ class WeeklyEvidenceCollector:
         repository_prefix: str,
         read_site: SiteReader | None = None,
         find_week_page: WeekPageFinder | None = None,
+        render_week_page: WeekPageRenderer | None = None,
         is_fragment: FragmentCheck | None = None,
         limits: EvidenceLimits | None = None,
         log: Callable[[str], None] | None = None,
@@ -138,6 +209,7 @@ class WeeklyEvidenceCollector:
         self._repository_prefix = repository_prefix
         self._read_site = read_site
         self._find_week_page = find_week_page
+        self._render_week_page = render_week_page
         self._is_fragment = is_fragment
         self._limits = limits or EvidenceLimits()
         self._log = log or (lambda message: None)
@@ -154,7 +226,10 @@ class WeeklyEvidenceCollector:
     def _collect_project(self, project: StudentProject, week: CourseWeek) -> ProjectEvidence:
         notes: list[str] = []
         prefix = week_directory(week)
+        names_week = week_page_pattern(week.number)
         document_paths: list[str] = []
+        site_document_paths: list[str] = []
+        week_site_paths: list[str] = []
         week_file_count = 0
         site_file_count = 0
         try:
@@ -174,15 +249,30 @@ class WeeklyEvidenceCollector:
                         document_paths.append(path)
                 elif path.startswith(SITE_DIRECTORY):
                     site_file_count += 1
+                    relative = path[len(SITE_DIRECTORY) :]
+                    # A site file named for the week is this week's work even when the home
+                    # page's served HTML does not link it.
+                    if names_week.search(relative):
+                        week_site_paths.append(relative)
+                        if _is_document(path):
+                            site_document_paths.append(path)
             if tree.get("truncated") is True:
                 notes.append("repository tree was truncated; counts are lower bounds")
         except (StudentProjectNotFound, StudentProjectProviderError) as error:
             notes.append(f"repository tree unavailable: {error}")
 
-        documents = self._read_documents(project.id, sorted(document_paths, key=_document_priority))
+        documents = self._read_documents(
+            project.id,
+            [
+                *sorted(document_paths, key=_document_priority),
+                *sorted(site_document_paths, key=_document_priority),
+            ],
+        )
         commits, commit_count = self._read_commits(project.id, week, notes)
         site_text = self._read_site_text(project, notes)
-        week_page_url, week_page_text = self._read_week_page(project, week, notes)
+        week_page_url, week_page_text = self._read_week_page(
+            project, week, notes, week_site_paths=week_site_paths
+        )
         week_page_fragment = self._fragment(project, week_page_url, notes)
         self._log(
             f"  {project.id}: {week_file_count} week files, {len(documents)} documents, "
@@ -194,6 +284,7 @@ class WeeklyEvidenceCollector:
             site_url=project.site_url,
             week_file_count=week_file_count,
             site_file_count=site_file_count,
+            week_site_file_count=len(week_site_paths),
             commit_count=commit_count,
             commits=commits,
             documents=documents,
@@ -215,6 +306,8 @@ class WeeklyEvidenceCollector:
             except (StudentProjectNotFound, StudentProjectProviderError):
                 continue
             raw_text = result.get("text")
+            if isinstance(raw_text, str) and path.casefold().endswith(_NOTEBOOK_SUFFIX):
+                raw_text = notebook_prose(raw_text)
             if not isinstance(raw_text, str) or not raw_text.strip():
                 continue
             text, truncated = compact_text(
@@ -254,7 +347,12 @@ class WeeklyEvidenceCollector:
         return tuple(in_window[: self._limits.max_commits]), len(in_window)
 
     def _read_week_page(
-        self, project: StudentProject, week: CourseWeek, notes: list[str]
+        self,
+        project: StudentProject,
+        week: CourseWeek,
+        notes: list[str],
+        *,
+        week_site_paths: Sequence[str] = (),
     ) -> tuple[str | None, str | None]:
         if self._find_week_page is None or project.site_url is None:
             return None, None
@@ -264,21 +362,64 @@ class WeeklyEvidenceCollector:
             notes.append(f"week page discovery failed: {type(error).__name__}")
             return None, None
         if page_url is None:
-            return None, None
+            published = self._published_week_page(project.site_url, week_site_paths, notes)
+            if published is not None:
+                return published
+            return self._render_week_post(project.site_url, week, notes)
         if page_url.split("#", 1)[0].rstrip("/") == project.site_url.rstrip("/"):
             return page_url, None  # a section of the root page; its text is site_text
         if self._read_site is None:
             return page_url, None
         try:
-            page = self._read_site(page_url)
+            text = self._page_text(page_url)
         except Exception as error:  # an unreadable post must not stop the digest
             notes.append(f"week page unreadable: {type(error).__name__}")
             return page_url, None
+        return page_url, text
+
+    def _page_text(self, page_url: str) -> str | None:
+        if self._read_site is None:
+            return None
+        page = self._read_site(page_url)
         text = page if isinstance(page, str) else page.get("text")
         if not isinstance(text, str) or not text.strip():
-            return page_url, None
+            return None
         compacted, _ = compact_text(text, limit=self._limits.max_week_page_chars)
-        return page_url, compacted or None
+        return compacted or None
+
+    def _published_week_page(
+        self, site_url: str, week_site_paths: Sequence[str], notes: list[str]
+    ) -> tuple[str, str | None] | None:
+        """The home page links no post for the week; the site folder may still hold one."""
+
+        if self._read_site is None:
+            return None
+        for page_url in week_site_pages(week_site_paths, site_url=site_url)[:2]:
+            try:
+                text = self._page_text(page_url)
+            except Exception:  # not deployed at this address; try the next candidate
+                continue
+            notes.append("the week's post was found among the site's files, not its links")
+            return page_url, text
+        return None
+
+    def _render_week_post(
+        self, site_url: str, week: CourseWeek, notes: list[str]
+    ) -> tuple[str | None, str | None]:
+        """The served HTML named no week post; a script may build the site's links."""
+
+        if self._render_week_page is None:
+            return None, None
+        try:
+            post = self._render_week_page(site_url, week)
+        except Exception as error:  # the browser pass is best effort, like static discovery
+            notes.append(f"week page browser discovery failed: {type(error).__name__}")
+            return None, None
+        if post is None:
+            return None, None
+        notes.append("the week's post was found by opening the site in a browser")
+        compacted, _ = compact_text(post.text, limit=self._limits.max_week_page_chars)
+        return post.url, compacted or None
 
     def _fragment(self, project: StudentProject, page_url: str | None, notes: list[str]) -> bool:
         if self._is_fragment is None or page_url is None or project.site_url is None:

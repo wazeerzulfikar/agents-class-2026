@@ -27,6 +27,7 @@ from course_server.newsletter import (
     RUBRIC,
     SCORE_SCHEMA,
     SCORE_WEIGHTS,
+    AssignmentBrief,
     CourseWeek,
     EvidenceLimits,
     FileNewsletterStore,
@@ -49,6 +50,7 @@ from course_server.newsletter import (
     ProjectEvidence,
     ProjectLink,
     ProjectScore,
+    RenderedPost,
     ScreenshotError,
     SiteScreenshot,
     WeeklyDigest,
@@ -63,6 +65,7 @@ from course_server.newsletter import (
     compose_newsletter,
     encode_jpeg,
     learning_goals_from_syllabus,
+    load_assignment_brief,
     load_lecture_notes,
     parse_schedule,
     parse_score,
@@ -76,7 +79,15 @@ from course_server.newsletter import (
     verify_quote,
 )
 from course_server.newsletter.cli import main as newsletter_main
-from course_server.newsletter.compose import EDITORIAL_MARKER, HIGHLIGHTS_MARKER
+from course_server.newsletter.collect import WeekPageFinder, notebook_prose, week_site_pages
+from course_server.newsletter.compose import (
+    EDITORIAL_MARKER,
+    HIGHLIGHTS_MARKER,
+    build_editorial_system_prompt,
+    headline_names_topic,
+    topic_terms,
+    validate_highlights,
+)
 from course_server.newsletter.images import filter_candidates, fragment_shell, is_html_fragment
 from course_server.newsletter.jobs import NewsletterJobRunner
 from course_server.newsletter.score import SCORING_MARKER, build_score_system_prompt
@@ -104,6 +115,26 @@ SCHEDULE = """# Fall 2026 Schedule
 
 def weeks() -> tuple[CourseWeek, ...]:
     return parse_schedule(SCHEDULE, timezone="America/New_York")
+
+
+def test_schedule_ignores_columns_after_the_tutorial() -> None:
+    """The maintained schedule also lists suggested readings; they are not part of a week."""
+
+    with_readings = (
+        "# Fall 2026 Schedule\n\n"
+        "| Date / Week | Lecture Topics | Hands-on tutorial | Suggested readings |\n"
+        "| ----- | ----- | ----- | ----- |\n"
+        "| Week 1 (9/15) | **What is an AI agent?** *PM* | Build a loop. *WZ* "
+        "| 1. A, [\u201cB\u201d](https://x.example/a).<br>2. C. |\n"
+        "| Week 2 (9/22) | No class | No class | No assigned readings. |\n"
+    )
+    first, second = parse_schedule(with_readings, timezone="America/New_York")
+    assert (first.number, first.topic, first.tutorial) == (
+        1,
+        "What is an AI agent?",
+        "Build a loop.",
+    )
+    assert second.has_class is False
 
 
 def test_schedule_parses_dated_weeks_windows_and_goals() -> None:
@@ -302,6 +333,154 @@ def test_collector_gathers_bounded_week_evidence_without_stopping_on_failures() 
     assert project_label("other", repository_prefix="agents2026-") == "other"
 
 
+def test_collector_reads_what_the_site_folder_holds_for_the_week() -> None:
+    """A post the home page does not link, and a write-up a script loads, are still files."""
+
+    site = "https://mitmedialab.github.io/agents2026-mo/"
+    notebook = json.dumps(
+        {
+            "cells": [
+                {"cell_type": "markdown", "metadata": {}, "source": ["# Knit\n", "It weaves."]},
+                {"cell_type": "code", "metadata": {}, "source": ["print('x')"], "outputs": []},
+            ]
+        }
+    )
+    catalog = FakeCatalog(
+        {
+            "agents2026-mo": FakeRepository(
+                site_url=site,
+                tree=[
+                    "website/index.html",
+                    "website/rooms/week01.html",
+                    "website/rooms/week01/extra/index.html",
+                    "website/rooms/week02.html",
+                    "website/docs/week01/part-1.md",
+                    "website/docs/week11/part-1.md",
+                    "weekly_builds/week01/.gitkeep",
+                    "weekly_builds/week01/Agent.ipynb",
+                ],
+                files={
+                    "website/docs/week01/part-1.md": "Glasses that prompt curiosity.",
+                    "weekly_builds/week01/Agent.ipynb": notebook,
+                },
+                commits=[],
+            ),
+            # A site with earlier work but nothing named for this week, and no commits.
+            "agents2026-quiet": FakeRepository(
+                site_url="https://mitmedialab.github.io/agents2026-quiet/",
+                tree=["website/index.html", "website/style.css", "website/week02.html"],
+                files={},
+                commits=[("2026-09-08T12:00:00Z", "Earlier work")],
+            ),
+        }
+    )
+    read: list[str] = []
+
+    def reader(url: str) -> str | dict[str, object]:
+        read.append(url)
+        if url.endswith("rooms/week01.html"):
+            return {"url": url, "text": "week 1   Melody, a music partner.", "images": []}
+        return {"url": url, "text": "Home", "images": []}
+
+    collector = WeeklyEvidenceCollector(
+        catalog,
+        repository_prefix="agents2026-",
+        read_site=reader,
+        find_week_page=lambda site_url, week: None,
+        limits=EvidenceLimits(workers=1),
+    )
+    mo, quiet = collector.collect(weeks()[0])
+
+    assert mo.week_page_url == f"{site}rooms/week01.html"
+    assert mo.week_page_text == "week 1 Melody, a music partner."
+    assert any("found among the site's files" in note for note in mo.notes)
+    # Week-folder documents first (the notebook's prose only), then the site's write-up.
+    assert [(document.path, document.text) for document in mo.documents] == [
+        ("weekly_builds/week01/Agent.ipynb", "# Knit\nIt weaves."),
+        ("website/docs/week01/part-1.md", "Glasses that prompt curiosity."),
+    ]
+    assert mo.week_site_file_count == 3 and mo.active
+    assert f"{site}rooms/week02.html" not in read
+    # A site that was not touched this week is not this week's work.
+    assert quiet.site_file_count == 3 and quiet.week_site_file_count == 0
+    assert quiet.week_page_url is None and quiet.active is False
+
+
+def test_week_site_pages_put_the_post_before_pages_nested_inside_it() -> None:
+    site = "https://mitmedialab.github.io/agents2026-mo"
+    assert week_site_pages(
+        [
+            "week03/demo/app/index.html",
+            "week03/notes page.html",
+            "week03/index.html",
+            "docs/week03/part-1.md",
+        ],
+        site_url=site,
+    ) == [
+        f"{site}/week03/",
+        f"{site}/week03/notes%20page.html",
+        f"{site}/week03/demo/app/",
+    ]
+    assert week_site_pages(["index.html"], site_url=site) == [f"{site}/index.html"]
+
+
+def test_notebook_prose_survives_a_file_cut_off_mid_cell() -> None:
+    notebook = json.dumps(
+        {
+            "cells": [
+                {"cell_type": "markdown", "id": "a", "metadata": {}, "source": ["# One\n", "x"]},
+                {"cell_type": "code", "metadata": {}, "source": ['"cell_type": "markdown"']},
+                {"cell_type": "markdown", "metadata": {}, "source": "Two as a string"},
+                {"cell_type": "markdown", "metadata": {}, "source": ["Three is cut off here"]},
+            ]
+        }
+    )
+    assert notebook_prose(notebook) == "# One\nx\n\nTwo as a string\n\nThree is cut off here"
+    cut = notebook[: notebook.index("cut off here")]
+    assert notebook_prose(cut) == "# One\nx\n\nTwo as a string"
+    assert notebook_prose("not a notebook") == ""
+
+
+def test_collector_opens_a_browser_only_when_served_html_names_no_week_post() -> None:
+    rendered: list[str] = []
+
+    def render(site_url: str, week: CourseWeek) -> RenderedPost | None:
+        rendered.append(site_url)
+        if "grace" in site_url:
+            return RenderedPost(
+                url=f"{site_url}week.html?id=week01", text="Week 01   A tool agent."
+            )
+        raise RuntimeError("browser exploded")
+
+    collector = WeeklyEvidenceCollector(
+        fake_catalog(),
+        repository_prefix="agents2026-",
+        read_site=read_site,
+        find_week_page=lambda site_url, week: (
+            f"{site_url}week01.html" if "ada" in site_url else None
+        ),
+        render_week_page=render,
+        limits=EvidenceLimits(workers=1),
+    )
+    evidence = {item.label: item for item in collector.collect(weeks()[0])}
+
+    # Ada's post was in the served HTML and Hal has no site, so neither opened a browser.
+    assert sorted(rendered) == [
+        "https://mitmedialab.github.io/agents2026-grace/",
+        "https://mitmedialab.github.io/agents2026-zed/",
+    ]
+    assert evidence["Ada"].week_page_text == "Post: I built a loop that renames files."
+    grace = evidence["Grace"]
+    assert (
+        grace.week_page_url == "https://mitmedialab.github.io/agents2026-grace/week.html?id=week01"
+    )
+    assert grace.week_page_text == "Week 01 A tool agent."
+    assert grace.visitor_url == grace.week_page_url
+    zed = evidence["Zed"]
+    assert zed.week_page_url is None and zed.week_page_text is None
+    assert any("browser discovery failed: RuntimeError" in note for note in zed.notes)
+
+
 def evidence(project_id: str, label: str, *, active: bool, site: bool = True) -> ProjectEvidence:
     return ProjectEvidence(
         project_id=project_id,
@@ -361,7 +540,7 @@ DENSE = (
 
 
 def editorial_json(
-    headline: str = "Loop, There It Is", editorial: str = EDITORIAL, quote_choice: int = 0
+    headline: str = "Agent Loop, There It Is", editorial: str = EDITORIAL, quote_choice: int = 0
 ) -> str:
     return json.dumps({"headline": headline, "editorial": editorial, "quote_choice": quote_choice})
 
@@ -510,7 +689,10 @@ def test_rubric_weights_four_criteria_and_old_scores_still_load() -> None:
 
     prompt = build_score_system_prompt(NewsletterBranding())
     assert "Score 4 things from 0 to 10" in prompt
-    assert "Set `blank` true only when the submission has nothing beyond" in prompt
+    # Blank is about this week: a site holding only earlier weeks' work is still blank.
+    assert "Set `blank` true only when the evidence shows nothing made for this week" in prompt
+    assert "only work from earlier weeks and final-project ideas" in prompt
+    assert "describe this week's build, not the site" in prompt
     for criterion in RUBRIC:
         assert f"- {criterion.key}: {criterion.guidance}" in prompt
 
@@ -563,7 +745,11 @@ def test_links_send_readers_to_pages_that_render_on_their_own() -> None:
         update={"week_page_url": f"{site}rooms/week01.html", "week_page_fragment": True}
     )
     assert base.visitor_url == site and post.visitor_url == f"{site}week01.html"
-    assert fragment.visitor_url == site
+    # A fragment is addressed on its site by name: a shell that loads posts by name opens it
+    # there, and any other site just shows its home page.
+    assert fragment.visitor_url == f"{site}#week01"
+    odd = fragment.model_copy(update={"week_page_url": f"{site}rooms/week 1 (draft).html"})
+    assert odd.visitor_url == site
 
     # The collector flags a fragment post and still reads its text for scoring.
     collector = WeeklyEvidenceCollector(
@@ -577,7 +763,7 @@ def test_links_send_readers_to_pages_that_render_on_their_own() -> None:
     evidence = {item.label: item for item in collector.collect(weeks()[0])}
     ada, grace = evidence["Ada"], evidence["Grace"]
     assert ada.week_page_fragment and ada.week_page_text is not None
-    assert ada.visitor_url == ada.site_url
+    assert ada.visitor_url == f"{ada.site_url}#week01"
     assert "links open the site" in " ".join(ada.notes)
     # A section of the root page is never a fragment.
     assert not grace.week_page_fragment and grace.visitor_url == grace.week_page_url
@@ -682,6 +868,149 @@ def test_compose_writes_only_the_selected_projects_in_order_and_reprompts_once()
     )
 
 
+def assignment_record(**changes: object) -> dict[str, object]:
+    record: dict[str, object] = {
+        "schema_version": 3,
+        "assignment_id": "week-1",
+        "revision": 2,
+        "status": "published",
+        "title": "Week 1: Designing Human\u2013Agent Interfaces",
+        "summary": "Design an interface between an agent and a human.",
+        "content_markdown": "# Week 1: Designing Human\u2013Agent Interfaces\n\nThink beyond chat.",
+        "release_at": "2026-09-15T00:00:00-04:00",
+        "due_at": "2026-09-21T23:59:00-04:00",
+        "created_at": "2026-09-14T12:00:00-04:00",
+        "updated_at": "2026-09-14T12:00:00-04:00",
+        "created_by_user_id": "00000000-0000-4000-8000-000000000001",
+    }
+    record.update(changes)
+    return record
+
+
+def test_the_weeks_assignment_is_the_published_record_due_in_its_window(tmp_path: Path) -> None:
+    week = weeks()[0]  # Sep 15 through Sep 21
+    assert load_assignment_brief(tmp_path / "missing", week) is None
+    (tmp_path / "week-1").mkdir()
+    # The deployment keeps one folder per assignment; a flat file works the same way.
+    (tmp_path / "week-1/week-1.json").write_text(json.dumps(assignment_record()))
+    (tmp_path / "week-2.json").write_text(
+        json.dumps(
+            assignment_record(
+                assignment_id="week-2",
+                title="Week 2: Building Tools",
+                release_at="2026-09-22T00:00:00-04:00",
+                due_at="2026-09-28T23:59:00-04:00",
+            )
+        )
+    )
+    (tmp_path / "draft.json").write_text(
+        json.dumps(assignment_record(assignment_id="draft", status="draft", title="Not posted"))
+    )
+    (tmp_path / "broken.json").write_text("{not json")
+    (tmp_path / "notes.json").write_text(json.dumps({"title": "not an assignment record"}))
+
+    brief = load_assignment_brief(tmp_path, week, limit=42)
+    assert brief == AssignmentBrief(
+        assignment_id="week-1",
+        revision=2,
+        title="Week 1: Designing Human\u2013Agent Interfaces",
+        text="# Week 1: Designing Human\u2013Agent Interfaces",
+        truncated=True,
+    )
+    second = load_assignment_brief(tmp_path, weeks()[1])
+    assert second is not None and second.title == "Week 2: Building Tools"
+    assert second.truncated is False
+    assert load_assignment_brief(tmp_path, weeks()[2]) is None
+
+
+def test_headline_must_reflect_the_assignments_main_topic() -> None:
+    title = "Week 3: Designing Human\u2013Agent Interfaces"
+    assert topic_terms(title) == ("designing", "human", "agent", "interfaces")
+    assert "week" not in topic_terms("What this week is about: tools") and topic_terms("") == ()
+    for related in (
+        "Interface the Music",
+        "Design of the Times",  # another form of "designing"
+        "Only Human: Agents Mind Their Manners",
+    ):
+        assert headline_names_topic(related, title), related
+    for unrelated in (
+        "Hand-Off, Hands On",
+        "Delegation Station: Agency Gets the Green Light",  # "agency" is not "agent"
+        "Internal Affairs",  # "inter-" is not "interfaces"
+    ):
+        assert not headline_names_topic(unrelated, title), unrelated
+    assert headline_names_topic("Anything Goes", "")  # nothing to check against
+
+    problems = validate_editorial("Hand-Off, Hands On", EDITORIAL, topic=title)
+    assert len(problems) == 1
+    assert problems[0].startswith("headline must reflect the main topic of this week's assignment")
+    assert "designing, human, agent, interfaces" in problems[0]
+    assert validate_editorial("Interface the Music", EDITORIAL, topic=title) == ()
+
+    # The composer shows the model the assignment as posted, feeds a miss back, and accepts a
+    # headline that uses the title's terms.
+    brief = AssignmentBrief(
+        assignment_id="week-1", revision=1, title=title, text=f"# {title}\n\nThink beyond chat."
+    )
+    writer = ScriptedWriter(
+        [], editorials=[editorial_json("Agency Station"), editorial_json("Interface Value")]
+    )
+    draft = compose_editorial(
+        digest_for(weeks()[0]),
+        (),
+        writer,
+        branding=NewsletterBranding(),
+        assignment=brief,
+        link_checker=None,
+    )
+    assert draft.headline == "Interface Value"
+    first, retry = writer.editorial_prompts
+    assert f"## The assignment as given to the class\nTitle: {title}" in first
+    assert "Think beyond chat." in first
+    assert "headline must reflect the main topic of this week's assignment" in retry
+    system_prompt = build_editorial_system_prompt(NewsletterBranding())
+    assert "the main topic of this week's assignment as the class received it" in system_prompt
+    # Without a record, the schedule's assignment line and topic stand in.
+    fallback = ScriptedWriter([], editorials=[editorial_json("Agent Loop, There It Is")])
+    compose_editorial(
+        digest_for(weeks()[0]), (), fallback, branding=NewsletterBranding(), link_checker=None
+    )
+    assert "No assignment record covers this week" in fallback.editorial_prompts[0]
+
+
+def test_first_paragraph_synthesizes_approaches_instead_of_listing_builds() -> None:
+    sites = [f"https://mitmedialab.github.io/agents2026-{name}/" for name in ("a", "b", "c", "d")]
+    practice = " ".join(["Next week, show each run from start to end."] * 7)
+
+    def editorial(first: str) -> str:
+        return first + " " + " ".join(["The loop ran and it worked well."] * 5) + "\n\n" + practice
+
+    grouped = editorial(
+        f"Many of you moved the agent off the screen, into [glasses]({sites[0]}) "
+        f"and [a watch]({sites[1]}). Others kept [a canvas]({sites[2]}) in view."
+    )
+    assert validate_editorial("Fine", grouped, project_urls=sites) == ()
+
+    listed = editorial(
+        f"[A map]({sites[0]}) showed traces. [A recorder]({sites[1]}) asked gently. "
+        f"[A canvas]({sites[2]}) kept versions."
+    )
+    problems = validate_editorial("Fine", listed, project_urls=sites)
+    assert (
+        len(problems) == 1 and "3 sentences in the first paragraph point at a build" in problems[0]
+    )
+
+    crowded = editorial(
+        f"You tried [glasses]({sites[0]}), [a watch]({sites[1]}), [a canvas]({sites[2]}) "
+        f"and [a voice]({sites[3]})."
+    )
+    problems = validate_editorial("Fine", crowded, project_urls=sites)
+    assert len(problems) == 1 and "links 4 builds" in problems[0]
+    prompt = build_editorial_system_prompt(NewsletterBranding())
+    assert "a synthesis of how the class answered the assignment, not a tour of builds" in prompt
+    assert "Use at most 3 such links, in at most 2 sentences." in prompt
+
+
 def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() -> None:
     week = weeks()[0]
     digest = digest_for(week)
@@ -711,14 +1040,16 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
     def link_checker(url: str) -> bool:
         return url.startswith("https://good.example/")
 
-    writer = ScriptedWriter([], editorials=[editorial_json("Loop, There It Is", quote_choice=1)])
+    writer = ScriptedWriter(
+        [], editorials=[editorial_json("Agent Loop, There It Is", quote_choice=1)]
+    )
 
     draft = compose_editorial(
         digest, scores, writer, branding=branding, lecture=lecture, link_checker=link_checker
     )
 
     assert (draft.headline, draft.editorial, draft.quote_choice) == (
-        "Loop, There It Is",
+        "Agent Loop, There It Is",
         EDITORIAL,
         1,
     )
@@ -850,7 +1181,7 @@ def test_compose_editorial_is_anonymous_short_constructive_and_link_checked() ->
         branding=branding,
         link_checker=None,
     )
-    assert copy.headline == "Loop, There It Is" and len(copy.highlights) == 1
+    assert copy.headline == "Agent Loop, There It Is" and len(copy.highlights) == 1
     assert chosen == ("agents2026-ada", "Ada", "My loop ate my homework.")
 
 
@@ -1380,11 +1711,15 @@ class RecordingMailAdapter:
 @dataclass
 class FakeImageFinder:
     calls: list[tuple[str, int, str]] = field(default_factory=list)
+    post_urls: dict[str, str | None] = field(default_factory=dict)
     fail_for: set[str] = field(default_factory=set)
     fragment_for: set[str] = field(default_factory=set)
 
-    def find(self, *, site_url: str, week: CourseWeek, context: str) -> FoundImage | None:
+    def find(
+        self, *, site_url: str, week: CourseWeek, context: str, post_url: str | None = None
+    ) -> FoundImage | None:
         self.calls.append((site_url, week.number, context))
+        self.post_urls[site_url] = post_url
         if site_url in self.fail_for:
             raise ScreenshotError("Site inspection failed (Timeout).")
         return FoundImage(
@@ -1404,6 +1739,8 @@ def make_service(
     *,
     cooldown: int = 2,
     image_finder: FakeImageFinder | None = None,
+    find_week_page: WeekPageFinder | None = None,
+    assignment: AssignmentBrief | None = None,
 ) -> tuple[NewsletterService, FileNewsletterStore]:
     store = FileNewsletterStore(tmp_path / "newsletter")
     settings = NewsletterSettings(highlight_count=2, highlight_cooldown_issues=cooldown)
@@ -1415,16 +1752,89 @@ def make_service(
             fake_catalog(),
             repository_prefix="agents2026-",
             read_site=read_site,
+            find_week_page=find_week_page,
             limits=EvidenceLimits(workers=1),
         ),
         writer=writer,
         image_finder=image_finder or FakeImageFinder(),
         link_checker=None,
         lecture_loader=lambda week: None,
+        assignment_loader=lambda week: assignment,
         model_id="test-model",
         clock=lambda: datetime(2026, 9, 22, 15, 0, tzinfo=UTC),
     )
     return service, store
+
+
+def test_the_image_finder_starts_from_the_post_the_collector_found(tmp_path: Path) -> None:
+    """A post no link names (found among the site's files) must still supply the image."""
+
+    writer = ScriptedWriter(
+        [copy_json("agents2026-ada", "agents2026-hal-9000")],
+        scores={
+            "agents2026-ada": score_json(goal_fit=9, originality=8, execution=7),
+            "agents2026-hal-9000": score_json(goal_fit=7, originality=6, execution=6),
+        },
+    )
+    finder = FakeImageFinder()
+    service, _ = make_service(
+        tmp_path, writer, image_finder=finder, find_week_page=find_week_page_for_tests
+    )
+
+    service.draft(as_of=date(2026, 9, 22))
+
+    ada_site = "https://mitmedialab.github.io/agents2026-ada/"
+    assert finder.post_urls == {ada_site: f"{ada_site}week01.html"}  # Hal has no site
+
+
+def test_the_service_writes_the_issue_against_the_weeks_assignment_record(tmp_path: Path) -> None:
+    writer = ScriptedWriter(
+        [copy_json("agents2026-ada", "agents2026-hal-9000")],
+        scores={
+            "agents2026-ada": score_json(goal_fit=9, originality=8, execution=7),
+            "agents2026-hal-9000": score_json(goal_fit=7, originality=6, execution=6),
+        },
+        editorials=[editorial_json("Loop the Loop"), editorial_json("First Agents")],
+    )
+    brief = AssignmentBrief(
+        assignment_id="week-1",
+        revision=2,
+        title="Week 1: Your Website, Project Ideas, and First Agent",
+        text="# Week 1\n\nImplement your first agent from scratch.",
+    )
+    service, _ = make_service(tmp_path, writer, assignment=brief)
+
+    issue = service.draft(as_of=date(2026, 9, 22))
+
+    # "Loop" is the schedule's word; the record's title is what the headline must reflect.
+    assert issue.body.headline == "First Agents"
+    assert (
+        "Title: Week 1: Your Website, Project Ideas, and First Agent"
+        in (writer.editorial_prompts[0])
+    )
+    assert "Implement your first agent from scratch." in writer.editorial_prompts[0]
+
+
+def test_highlight_copy_never_makes_the_student_the_tool() -> None:
+    selected = ("agents2026-ada",)
+    labels = {"agents2026-ada": "Ada"}
+    wrong = Highlight(
+        project_id="agents2026-ada",
+        headline="Loop the loop",
+        description="Ada helps you plan a trip. It stops when the plan is done.",
+    )
+    problems = validate_highlights((wrong,), selected=selected, labels=labels)
+    assert len(problems) == 1 and 'opens a sentence with "Ada"' in problems[0]
+    # The build as subject, a possessive, and a word that merely starts the same are all fine.
+    fine = wrong.model_copy(
+        update={
+            "description": (
+                "Ada's agent helps you plan a trip. Adaptive steps stop it when the plan is done."
+            )
+        }
+    )
+    assert validate_highlights((fine,), selected=selected, labels=labels) == ()
+    assert validate_highlights((wrong,), selected=selected) == ()
 
 
 def test_a_fragment_post_found_by_the_browser_never_becomes_the_link(tmp_path: Path) -> None:
@@ -1489,7 +1899,7 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         b"\xff\xd8jpeg"
     )
     assert "Featured projects, in order: agents2026-ada, agents2026-hal-9000" in writer.prompts[0]
-    assert issue.body.headline == "Loop, There It Is"
+    assert issue.body.headline == "Agent Loop, There It Is"
     assert issue.built_for("agents2026-ada") == "A tidy agent loop."
     assert issue.built_for("agents2026-grace") is None
     assert "No candidate quotes were found this week" in writer.editorial_prompts[0]
@@ -1503,7 +1913,7 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         )
         assert preview.status == "draft" and store.load("2026-week01") == issue
         assert adapter.sent[0].to == ("me@mit.edu",)
-        assert adapter.sent[0].subject == "The Class Runtime from MAS.S60"
+        assert adapter.sent[0].subject == "The Class Runtime from MAS.S60 · Issue 01"
         assert adapter.sent[0].html is not None and "<!DOCTYPE html>" in adapter.sent[0].html
         assert 'src="cid:agents2026-ada"' in adapter.sent[0].html
         assert [(image.content_id, image.data) for image in adapter.sent[0].inline_images] == [
@@ -1567,6 +1977,7 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
             limits=EvidenceLimits(workers=1),
         ),
         writer=week2_writer,
+        assignment_loader=lambda week: None,
         clock=lambda: datetime(2026, 9, 29, 15, 0, tzinfo=UTC),
     )
     week2_catalog = fake_catalog()
@@ -1588,6 +1999,7 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
         image_finder=FakeImageFinder(fail_for={"https://mitmedialab.github.io/agents2026-grace/"}),
         link_checker=None,
         lecture_loader=lambda week: None,
+        assignment_loader=lambda week: None,
         clock=lambda: datetime(2026, 9, 29, 15, 0, tzinfo=UTC),
     )
     week2 = service2.draft()
@@ -1605,13 +2017,13 @@ def test_service_drafts_for_review_and_sends_only_on_explicit_approval(tmp_path:
     # Rewriting keeps the stored selection, scores, and images; only the copy changes.
     fresh = ScriptedWriter(
         [copy_json("agents2026-ada", "agents2026-hal-9000")],
-        editorials=[editorial_json("Loop Again", quote_choice=0)],
+        editorials=[editorial_json("Agents Loop Again", quote_choice=0)],
     )
     rewriter, _ = make_service(tmp_path, fresh)
     tools_store = FileNewsletterStore(tmp_path / "newsletter")
     tools_store.save(issue.model_copy(update={"status": "draft", "approval": None}))
     rewritten = rewriter.rewrite_copy("2026-week01")
-    assert rewritten.body.headline == "Loop Again"
+    assert rewritten.body.headline == "Agents Loop Again"
     assert rewritten.highlighted_project_ids() == ("agents2026-ada", "agents2026-hal-9000")
     assert rewritten.scores == issue.scores and rewritten.images == issue.images
     assert rewritten.created_at == datetime(2026, 9, 22, 15, 0, tzinfo=UTC)
@@ -1754,6 +2166,7 @@ def make_tools(tmp_path: Path, writer: ScriptedWriter) -> tuple[NewsletterTools,
             image_finder=FakeImageFinder(),
             link_checker=None,
             lecture_loader=lambda week: None,
+            assignment_loader=lambda week: None,
             model_id="test-model",
             clock=lambda: datetime(2026, 9, 22, 15, 0, tzinfo=UTC),
             log=log,
@@ -1847,7 +2260,7 @@ def test_course_agent_tools_draft_review_and_prepare_send_for_instructors_only(
         assert isinstance(status.content, dict)
         issue = status.content["issue"]
         assert isinstance(issue, dict)
-        assert issue["status"] == "draft" and issue["headline"] == "Loop, There It Is"
+        assert issue["status"] == "draft" and issue["headline"] == "Agent Loop, There It Is"
         highlights = cast(list[dict[str, JsonValue]], issue["highlights"])
         assert [h["student"] for h in highlights] == ["Ada", "Hal 9000"]
         scoreboard = cast(list[dict[str, JsonValue]], issue["scoreboard_top"])
@@ -1872,7 +2285,7 @@ def test_course_agent_tools_draft_review_and_prepare_send_for_instructors_only(
         event = prepared.emitted_events[0]
         assert event.type == "instructor.newsletter.confirmation_requested"
         assert event.payload["audience"] == "all_students" and event.payload["recipients"] == []
-        assert event.payload["headline"] == "Loop, There It Is"
+        assert event.payload["headline"] == "Agent Loop, There It Is"
         assert event.metadata == {"visibility": "private"}
         stored = tools.store.load("2026-week01")
         assert stored is not None and stored.status == "awaiting_confirmation"

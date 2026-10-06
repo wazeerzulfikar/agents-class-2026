@@ -89,6 +89,11 @@ def job_summary(job: NewsletterJob) -> dict[str, JsonValue]:
     }
 
 
+def _label(issue: NewsletterIssue, project_id: str) -> str:
+    link = issue.link_for(project_id)
+    return link.label if link else project_id
+
+
 def issue_summary(issue: NewsletterIssue, store: FileNewsletterStore) -> dict[str, JsonValue]:
     """What the agent needs to present a draft: copy, selection, reasons, and file paths."""
 
@@ -129,8 +134,19 @@ def issue_summary(issue: NewsletterIssue, store: FileNewsletterStore) -> dict[st
         "subject": issue.subject,
         "headline": issue.body.headline,
         "editorial": issue.body.editorial,
+        "who_to_ask": [
+            {
+                "question": entry.question,
+                "students": [_label(issue, project_id) for project_id in entry.project_ids],
+            }
+            for entry in issue.body.ask_around
+        ],
         "highlights": highlights,
         "other_builds": len(issue.other_projects()),
+        "build_groups": [
+            {"heading": heading, "students": [link.label for link in links]}
+            for heading, links in issue.grouped_other_projects()
+        ],
         "quote": {
             "text": issue.quote.text,
             "author": issue.quote.author,

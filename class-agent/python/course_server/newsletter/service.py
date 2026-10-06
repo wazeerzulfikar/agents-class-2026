@@ -12,6 +12,7 @@ from pydantic import EmailStr, ValidationError
 
 from course_server.mail.models import InlineImage, MailAdapter, OutboundMail
 
+from .assignment import AssignmentBrief, load_assignment_brief
 from .collect import WeeklyEvidenceCollector
 from .compose import (
     LinkChecker,
@@ -36,6 +37,7 @@ from .models import (
     ProjectScore,
     WeeklyDigest,
     issue_id_for,
+    issue_subject,
 )
 from .quotes import PIONEER_QUOTES, choose_quote
 from .render import cid_image_source, render_html, render_text
@@ -113,6 +115,7 @@ class NewsletterService:
         image_finder: HighlightImageFinder | None = None,
         link_checker: LinkChecker | None = link_resolves,
         lecture_loader: Callable[[CourseWeek], LectureNotes | None] | None = None,
+        assignment_loader: Callable[[CourseWeek], AssignmentBrief | None] | None = None,
         quotes: tuple[PioneerQuote, ...] = PIONEER_QUOTES,
         model_id: str | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -126,6 +129,9 @@ class NewsletterService:
         self._link_checker = link_checker
         self._lecture_loader = lecture_loader or (
             lambda week: load_lecture_notes(settings.slides_path, settings.syllabus_path, week)
+        )
+        self._assignment_loader = assignment_loader or (
+            lambda week: load_assignment_brief(settings.assignments_path, week)
         )
         self._store = store
         self._quotes = quotes
@@ -193,6 +199,7 @@ class NewsletterService:
             selected=selected,
             branding=self._settings.branding,
             lecture=lecture,
+            assignment=self._assignment_for(week),
             link_checker=self._link_checker,
         )
         sites = {item.project_id: item.site_url for item in evidence}
@@ -217,15 +224,16 @@ class NewsletterService:
             issue_id=issue_id,
             week=week,
             branding=self._settings.branding,
-            subject=self._settings.subject,
+            subject=issue_subject(self._settings.subject, week),
             body=copy,
             roster=tuple(
                 ProjectLink(
                     project_id=item.project_id,
                     label=item.label,
                     site_url=item.site_url,
-                    # A fragment post only renders inside the site, so readers go to the site.
-                    post_url=None if item.week_page_fragment else item.week_page_url,
+                    # A fragment post only renders inside the site, so readers go to the
+                    # site, at the address its shell would open the post from.
+                    post_url=item.visitor_url if item.week_page_url is not None else None,
                     posted=item.active,
                 )
                 for item in evidence
@@ -238,6 +246,19 @@ class NewsletterService:
         )
         self._store.save(issue)
         return issue
+
+    def _assignment_for(self, week: CourseWeek) -> AssignmentBrief | None:
+        """The week's assignment record, logged so a missing or stale copy is visible."""
+
+        assignment = self._assignment_loader(week)
+        self._log(
+            f"Assignment: {assignment.title} (record {assignment.assignment_id}, "
+            f"revision {assignment.revision})"
+            if assignment is not None
+            else "Assignment: no published record is due this week in "
+            f"{self._settings.assignments_path}; the title follows the schedule's line instead."
+        )
+        return assignment
 
     def rewrite_copy(self, issue_id: str) -> NewsletterIssue:
         """Regenerate headline, editorial, highlights, and quote; keep selection and images."""
@@ -269,6 +290,7 @@ class NewsletterService:
             selected=selected,
             branding=self._settings.branding,
             lecture=lecture,
+            assignment=self._assignment_for(issue.week),
             link_checker=self._link_checker,
         )
         sites = {item.project_id: item.site_url for item in evidence}
@@ -314,7 +336,10 @@ class NewsletterService:
             for attempt in (1, 2):  # one retry: site inspection can time out transiently
                 try:
                     found = self._image_finder.find(
-                        site_url=project.site_url, week=week, context=context
+                        site_url=project.site_url,
+                        week=week,
+                        context=context,
+                        post_url=project.week_page_url,
                     )
                     break
                 except ScreenshotError as error:

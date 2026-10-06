@@ -42,6 +42,13 @@ _SUBHEAD = (
     f"font-family:{_SANS};font-size:22px;line-height:1.25;font-weight:700;"
     f"letter-spacing:-0.01em;color:{_INK};"
 )
+# An approach heading over a few names in the list of other builds: one step up from the
+# names, well under the section subheading.
+_GROUP_HEADING = f"font-family:{_SANS};font-size:17px;line-height:1.3;font-weight:600;color:{_INK};"
+_BODY = f"font-family:{_SANS};font-size:16px;line-height:1.55;color:{_INK_SOFT};"
+# Other builds the editorial placed under no approach are listed last under this heading.
+UNGROUPED_HEADING = "Other paths"
+ASK_AROUND_LABEL = "Who got past it"
 # Link underlines sit inside the text blend below, where a client that recolors borders and one
 # that does not produce mirror-image results; a mid grey looks the same either way.
 _LINK_LINE = "#7d7d78"
@@ -125,6 +132,36 @@ def _project_line(issue: NewsletterIssue, link: ProjectLink) -> str:
     return f"{link.label}: {built}{site}"
 
 
+def _named(issue: NewsletterIssue, project_id: str) -> tuple[str, str | None]:
+    link = issue.link_for(project_id)
+    return (link.label if link else project_id, issue.open_url(project_id))
+
+
+def _ask_around_text(issue: NewsletterIssue) -> list[str]:
+    if not issue.body.ask_around:
+        return []
+    lines = ["", ASK_AROUND_LABEL.upper()]
+    for entry in issue.body.ask_around:
+        people = [
+            f"{label} ({url})" if url else label
+            for label, url in (_named(issue, project_id) for project_id in entry.project_ids)
+        ]
+        lines.append(f"- {entry.question} Ask {' or '.join(people)}.")
+    return lines
+
+
+def _other_builds_text(issue: NewsletterIssue) -> list[str]:
+    sections = issue.grouped_other_projects()
+    if not sections:
+        return ["- Everyone who posted made the highlights this week."]
+    lines: list[str] = []
+    for heading, links in sections:
+        if heading is not None or len(sections) > 1:
+            lines.extend(["", heading or UNGROUPED_HEADING])
+        lines.extend(f"- {_project_line(issue, link)}" for link in links)
+    return lines
+
+
 def render_text(issue: NewsletterIssue) -> str:
     branding = issue.branding
     lines: list[str] = [
@@ -137,6 +174,7 @@ def render_text(issue: NewsletterIssue) -> str:
         _MARKDOWN_LINK.sub(r"\1 (\2)", issue.body.editorial),
         "",
         f"— {branding.editor_name}",
+        *_ask_around_text(issue),
         "",
         _RULE,
         "",
@@ -154,11 +192,7 @@ def render_text(issue: NewsletterIssue) -> str:
     lines.append(f"* {_selection_line(issue)}: {highlights_question_url(issue)}")
     lines.append("")
     lines.append("ALL THE OTHER BUILDS THIS WEEK")
-    others = issue.other_projects()
-    if others:
-        lines.extend(f"- {_project_line(issue, link)}" for link in others)
-    else:
-        lines.append("- Everyone who posted made the highlights this week.")
+    lines.extend(_other_builds_text(issue))
     lines.extend(
         [
             "",
@@ -239,6 +273,69 @@ def _highlight_html(issue: NewsletterIssue, index: int, *, image_src: ImageSourc
     return f'<div style="margin:0 0 48px 0;">{figure}{text}</div>'
 
 
+def _other_build_html(issue: NewsletterIssue, link: ProjectLink) -> str:
+    # Names that link read as links: the same mid-grey underline as every other link.
+    name_style = f"{_LABEL}font-weight:600;{_UNDERLINED}"
+    return (
+        '<p style="margin:0 0 12px 0;">'
+        + (
+            _anchor(link.post_url or link.site_url or "", escape(link.label), style=name_style)
+            if (link.post_url or link.site_url)
+            else f'<span style="{_LABEL}font-weight:600;color:{_INK};">{escape(link.label)}</span>'
+        )
+        # A little air under the underlined name; clients without inline-block just wrap.
+        + f'<br><span style="display:inline-block;margin-top:5px;font-family:{_SANS};'
+        f'font-size:15px;line-height:1.5;color:{_INK_SOFT};">'
+        + escape(issue.built_for(link.project_id) or "Nothing posted for this week yet.")
+        + "</span></p>"
+    )
+
+
+def _other_builds_html(issue: NewsletterIssue) -> str:
+    """The other builds, under their approach headings when the editorial grouped them."""
+
+    sections = issue.grouped_other_projects()
+    if not sections:
+        return (
+            f'<p style="margin:0;{_LABEL}">Everyone who posted made the highlights this week.</p>'
+        )
+    parts: list[str] = []
+    for position, (heading, links) in enumerate(sections):
+        if heading is not None or len(sections) > 1:
+            top = "0" if position == 0 else "26px"
+            parts.append(
+                f'<p style="margin:{top} 0 14px 0;{_GROUP_HEADING}">'
+                f"{escape(heading or UNGROUPED_HEADING)}</p>"
+            )
+        parts.extend(_other_build_html(issue, link) for link in links)
+    return "".join(parts)
+
+
+def _ask_around_html(issue: NewsletterIssue) -> str:
+    """Under the editorial: each blocker it named, and the classmates who got past it."""
+
+    if not issue.body.ask_around:
+        return ""
+    rows: list[str] = []
+    for entry in issue.body.ask_around:
+        people: list[str] = []
+        for project_id in entry.project_ids:
+            label, url = _named(issue, project_id)
+            people.append(
+                _anchor(url, escape(label), style=f"font-weight:600;{_UNDERLINED}")
+                if url
+                else f'<span style="font-weight:600;">{escape(label)}</span>'
+            )
+        rows.append(
+            f'<p style="margin:0 0 10px 0;{_BODY}">{escape(entry.question)} Ask '
+            f"{' or '.join(people)}.</p>"
+        )
+    return (
+        f'<p style="margin:30px 0 10px 0;{_SECTION}color:{_MUTED};">{ASK_AROUND_LABEL}</p>'
+        + "".join(rows)
+    )
+
+
 def render_html(
     issue: NewsletterIssue,
     *,
@@ -251,28 +348,7 @@ def render_html(
         _highlight_html(issue, index, image_src=source)
         for index in range(1, len(issue.body.highlights) + 1)
     )
-    others = issue.other_projects()
-    # Names that link read as links: the same mid-grey underline as every other link.
-    name_style = f"{_LABEL}font-weight:600;{_UNDERLINED}"
-    other_names = (
-        "".join(
-            '<p style="margin:0 0 12px 0;">'
-            + (
-                _anchor(link.post_url or link.site_url or "", escape(link.label), style=name_style)
-                if (link.post_url or link.site_url)
-                else f'<span style="{_LABEL}font-weight:600;color:{_INK};">'
-                f"{escape(link.label)}</span>"
-            )
-            # A little air under the underlined name; clients without inline-block just wrap.
-            + f'<br><span style="display:inline-block;margin-top:5px;font-family:{_SANS};'
-            f'font-size:15px;line-height:1.5;color:{_INK_SOFT};">'
-            + escape(issue.built_for(link.project_id) or "Nothing posted for this week yet.")
-            + "</span></p>"
-            for link in others
-        )
-        if others
-        else f'<p style="margin:0;{_LABEL}">Everyone who posted made the highlights this week.</p>'
-    )
+    other_names = _other_builds_html(issue)
     editorial = "".join(
         f'<p style="margin:0 0 18px 0;font-family:{_SANS};font-size:17px;line-height:1.65;'
         f'color:{_INK_SOFT};">{_prose_html(paragraph.strip())}</p>'
@@ -333,6 +409,7 @@ def render_html(
         f'<p style="margin:0 0 14px 0;{_SUBHEAD}">How the week went</p>'
         f"{editorial}"
         f'<p style="margin:-6px 0 0 0;{_LABEL}">&mdash; {escape(branding.editor_name)}</p>'
+        f"{_ask_around_html(issue)}"
         f"{_TEXT_CLOSE}{rule}{_TEXT_OPEN}"
         f'<p style="margin:0 0 24px 0;{_SUBHEAD}">Highlights*</p>'
         f"{_TEXT_CLOSE}"

@@ -119,7 +119,9 @@ class ImageJudge(Protocol):
 
 
 class HighlightImageFinder(Protocol):
-    def find(self, *, site_url: str, week: CourseWeek, context: str) -> FoundImage | None: ...
+    def find(
+        self, *, site_url: str, week: CourseWeek, context: str, post_url: str | None = None
+    ) -> FoundImage | None: ...
 
 
 def week_page_pattern(week_number: int) -> re.Pattern[str]:
@@ -250,6 +252,72 @@ def static_anchors(site_url: str, *, timeout_seconds: float = 15.0) -> list[dict
     return anchors
 
 
+@dataclass(frozen=True)
+class RenderedPost:
+    url: str
+    text: str
+
+
+# The week's own section when the page keeps it under that id, otherwise the whole page.
+_POST_TEXT_JS = """(id) => {
+  const section = id ? document.getElementById(id) : null;
+  const node = section && section.innerText.trim() ? section : document.body;
+  return node ? node.innerText : '';
+}"""
+
+
+def read_rendered_week_post(
+    site_url: str,
+    week: CourseWeek,
+    *,
+    executable_path: Path | None = None,
+    timeout_ms: int = 20_000,
+    settle_ms: int = 800,
+) -> RenderedPost | None:
+    """The week's post as a visitor's browser shows it, for sites whose scripts build links.
+
+    Static discovery reads served HTML, which misses a menu a script renders and a post whose
+    script fills in its text. This opens the site root in headless Chromium, follows the first
+    same-site link that names the week, and returns that page's visible text. Errors propagate
+    so the collector can note them.
+    """
+
+    parsed = urlsplit(site_url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=True,
+            executable_path=str(executable_path) if executable_path is not None else None,
+        )
+        try:
+            page = browser.new_page()
+
+            def visit(url: str) -> None:
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                with contextlib.suppress(PlaywrightTimeoutError):
+                    page.wait_for_load_state("networkidle", timeout=5_000)
+                page.wait_for_timeout(settle_ms)
+
+            visit(site_url)
+            anchors = page.evaluate(_ANCHORS_JS)
+            rendered = anchors if isinstance(anchors, list) else []
+            posts = discover_week_pages(rendered, site_url=site_url, week=week)
+            # A single-page site shows the week as a section its script opens from `#week-NN`.
+            target = (
+                posts[0] if posts else discover_week_anchor(rendered, site_url=site_url, week=week)
+            )
+            if target is None:
+                return None
+            visit(target)
+            text = page.evaluate(_POST_TEXT_JS, urlsplit(target).fragment)
+        finally:
+            browser.close()
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return RenderedPost(url=target, text=text)
+
+
 def filter_candidates(
     raw_visuals: Sequence[Mapping[str, object]],
     *,
@@ -353,10 +421,19 @@ class PlaywrightImageFinder:
         self._jpeg_quality = jpeg_quality
         self._log = log or (lambda message: None)
 
-    def find(self, *, site_url: str, week: CourseWeek, context: str) -> FoundImage | None:
+    def find(
+        self, *, site_url: str, week: CourseWeek, context: str, post_url: str | None = None
+    ) -> FoundImage | None:
+        """`post_url` is the week's post when evidence collection already found it."""
+
         parsed = urlsplit(site_url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise ScreenshotError("Only public https sites are inspected.")
+        known = (
+            [post_url]
+            if post_url is not None and urlsplit(post_url).hostname == parsed.hostname
+            else []
+        )
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(
@@ -381,8 +458,9 @@ class PlaywrightImageFinder:
                     week_pages = discover_week_pages(anchors, site_url=site_url, week=week)
                     week_anchor = discover_week_anchor(anchors, site_url=site_url, week=week)
                     # Root visuals are considered only when the site has no week post; a
-                    # landing-page graphic must not outrank a capture of the actual post.
-                    scan = week_pages or [week_anchor or site_url]
+                    # landing-page graphic must not outrank a capture of the actual post. The
+                    # post evidence collection found comes first: it may be one no link names.
+                    scan = list(dict.fromkeys([*known, *week_pages])) or [week_anchor or site_url]
                     fragments: set[str] = set()
                     for page_url in scan:
                         if page_url != site_url:
