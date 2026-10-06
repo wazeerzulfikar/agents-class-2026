@@ -1582,6 +1582,7 @@ export default function App() {
           content={syllabusContent}
           courseLinkPath={(uri) => documentForUri(uri)?.path ?? null}
           error={syllabusError}
+          layout={aboutRoute.layout}
           loading={syllabusLoading}
           loadingMessage={aboutRoute.loadingMessage}
           onCourseLink={(uri) => {

@@ -19,6 +19,7 @@ export interface DocumentLinkContext {
 const IMAGE_BLOCK = /^(?:\[)?!\[([^\]]*)\]\(([^)\s]+)\)(?:\]\(([^)\s]+)\))?$/;
 // A labelled line: the form of the facts under a page title, also honored inside the body.
 const FACT_LINE = /^\*\*([^*]+?):\*\*\s*(.+)$/;
+const RULE_LINE = /^(?:-{3,}|\*{3,}|_{3,})$/;
 
 function plainMarkdown(text: string): string {
   return text.replaceAll(/\\([\\`*{}\[\]()#+\-.!_<>|~])/g, "$1");
@@ -132,6 +133,12 @@ function markdownBlocks(
       continue;
     }
 
+    if (RULE_LINE.test(line)) {
+      blocks.push(<hr key={`rule-${index}`} />);
+      index += 1;
+      continue;
+    }
+
     if (FACT_LINE.test(line)) {
       const facts: Array<{ label: string; value: string }> = [];
       while (index < lines.length) {
@@ -144,7 +151,7 @@ function markdownBlocks(
         <dl className="syllabus-facts" key={`facts-${index}`}>
           {facts.map((fact, factIndex) => (
             <div key={`fact-${index}-${factIndex}`}>
-              <dt>{plainMarkdown(fact.label)}</dt>
+              <dt>{inlineMarkdown(fact.label, `fact-label-${index}-${factIndex}`, context)}</dt>
               <dd>{inlineMarkdown(fact.value, `fact-${index}-${factIndex}`, context)}</dd>
             </div>
           ))}
@@ -272,6 +279,7 @@ function markdownBlocks(
         candidate.startsWith(">") ||
         IMAGE_BLOCK.test(candidate) ||
         FACT_LINE.test(candidate) ||
+        RULE_LINE.test(candidate) ||
         (candidate.includes("|") && isTableDivider(lines[index + 1] ?? ""))
       ) {
         break;
@@ -289,7 +297,11 @@ function markdownBlocks(
   return blocks;
 }
 
+/** A reference document keeps the wide column its tables need; reading prose gets a measure. */
+export type DocumentLayout = "reference" | "reading";
+
 export interface SyllabusPageProps extends DocumentLinkContext {
+  layout?: DocumentLayout;
   pdfDownloadUrl?: string | undefined;
   pdfLabel?: string;
   pdfTitle?: string;
@@ -304,6 +316,7 @@ export function SyllabusPage({
   content,
   courseLinkPath,
   error,
+  layout = "reference",
   loading,
   loadingMessage = "Loading syllabus…",
   onCourseLink,
@@ -358,7 +371,7 @@ export function SyllabusPage({
 
   return (
     <main className="syllabus-page">
-      <article className="syllabus-document">
+      <article className="syllabus-document" data-layout={layout}>
         {pdfDownloadUrl ? (
           <div className="syllabus-download">
             <PdfDownload href={pdfDownloadUrl} title={pdfTitle} label={pdfLabel} />
@@ -372,7 +385,7 @@ export function SyllabusPage({
           <dl className="syllabus-metadata">
             {metadata.map((field) => (
               <div key={field.label}>
-                <dt>{field.label}</dt>
+                <dt>{inlineMarkdown(field.label, `metadata-label-${field.label}`, context)}</dt>
                 <dd>{inlineMarkdown(field.value, `metadata-${field.label}`, context)}</dd>
               </div>
             ))}

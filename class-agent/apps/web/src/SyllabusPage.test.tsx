@@ -125,6 +125,31 @@ describe("SyllabusPage", () => {
     );
   });
 
+  it("draws rules, links fact labels, and takes a reading layout", () => {
+    const content = [
+      "# Issue",
+      "",
+      "## All the builds this week",
+      "",
+      "**[Grace](https://g.example/):** Grace built a loop.",
+      "**Ivy:** Nothing posted for this week yet.",
+      "",
+      "---",
+      "",
+      "This newsletter was created by The Course Agent.",
+    ].join("\n");
+    const { container } = render(
+      <SyllabusPage content={content} error={null} layout="reading" loading={false} />,
+    );
+    expect(container.querySelector("article")).toHaveAttribute("data-layout", "reading");
+    const grace = screen.getByRole("link", { name: "Grace" });
+    expect(grace.closest("dt")).not.toBeNull();
+    expect(screen.getByText("Grace built a loop.").tagName).toBe("DD");
+    expect(screen.getByText("Ivy").tagName).toBe("DT");
+    expect(container.querySelectorAll("hr")).toHaveLength(1);
+    expect(screen.getByText("This newsletter was created by The Course Agent.").tagName).toBe("P");
+  });
+
   it("keeps the title visible when the masthead does not name the page", () => {
     render(
       <SyllabusPage

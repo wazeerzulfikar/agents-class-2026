@@ -9,6 +9,8 @@ export type CourseDocument =
 
 export interface CourseDocumentRoute {
   errorMessage: string;
+  /** Wide reference column (tables), or a reading measure for long prose. */
+  layout: "reference" | "reading";
   loadingMessage: string;
   /** The download control, shown when the resource advertises a registered PDF. */
   pdfLabel: string;
@@ -25,6 +27,7 @@ export interface CourseDocumentLocation {
 export const COURSE_DOCUMENTS: Record<CourseDocument, CourseDocumentRoute> = {
   syllabus: {
     errorMessage: "The syllabus could not be loaded. Please try again.",
+    layout: "reference",
     loadingMessage: "Loading syllabus…",
     pdfLabel: "Download syllabus PDF",
     pdfTitle: "Course syllabus",
@@ -32,6 +35,7 @@ export const COURSE_DOCUMENTS: Record<CourseDocument, CourseDocumentRoute> = {
   // How The Class Runtime picks highlights; issues now link to the Course Agent's FAQ answer.
   "newsletter-highlights": {
     errorMessage: "This page could not be loaded. Please try again.",
+    layout: "reference",
     loadingMessage: "Loading…",
     pdfLabel: "Download PDF",
     pdfTitle: "How The Class Runtime chooses its highlights",
@@ -39,6 +43,7 @@ export const COURSE_DOCUMENTS: Record<CourseDocument, CourseDocumentRoute> = {
   // Every sent issue of the weekly newsletter, newest first.
   newsletter: {
     errorMessage: "The newsletters could not be loaded. Please try again.",
+    layout: "reading",
     loadingMessage: "Loading newsletters…",
     pdfLabel: "Download PDF",
     pdfTitle: "The Class Runtime",
@@ -46,6 +51,7 @@ export const COURSE_DOCUMENTS: Record<CourseDocument, CourseDocumentRoute> = {
   // One sent issue, with its highlight images and every link active.
   "newsletter-issue": {
     errorMessage: "This issue could not be loaded. Please try again.",
+    layout: "reading",
     loadingMessage: "Loading issue…",
     pdfLabel: "Download issue PDF",
     pdfTitle: "The Class Runtime issue",

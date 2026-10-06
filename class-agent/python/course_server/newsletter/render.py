@@ -576,8 +576,8 @@ def render_markdown(
         for link in others:
             built = issue.built_for(link.project_id) or "Nothing posted for this week yet."
             url = link.post_url or link.site_url
-            name = _md_link(link.label, url) if url else f"**{_md_text(link.label)}**"
-            lines.append(f"- {name}: {_md_text(built)}")
+            name = _md_link(link.label, url) if url else _md_text(link.label)
+            lines.append(f"**{name}:** {_md_text(built)}")
     else:
         lines.append("Everyone who posted made the highlights this week.")
     attribution = _md_text(f"{issue.quote.author}, {issue.quote.source}")
@@ -591,6 +591,8 @@ def render_markdown(
             f"> \u201c{_md_text(issue.quote.text)}\u201d",
             ">",
             f"> \u2014 {attribution}",
+            "",
+            "---",
             "",
             f"This newsletter was created by {_md_text(branding.editor_name)}.",
             "",

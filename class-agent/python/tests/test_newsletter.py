@@ -2600,11 +2600,12 @@ def test_render_markdown_carries_sections_images_links_and_escaping() -> None:
         "\\* [How the Course Agent chooses what to highlight \u2192]"
         "(https://cognitive-agents.media.mit.edu/?q=newslettercriteria)\n\n"
         "## All the other builds this week\n\n"
-        "- [Grace](https://g.example/?x=1&y=2): Grace built a tiny tool-calling loop.\n"
-        "- **Ivy**: Nothing posted for this week yet.\n\n"
+        "**[Grace](https://g.example/?x=1&y=2):** Grace built a tiny tool-calling loop.\n"
+        "**Ivy:** Nothing posted for this week yet.\n\n"
         "## Last word\n\n"
         "> \u201cAgents learn best when reality gets a vote.\u201d\n>\n"
         "> \u2014 [Ada, from their week 1 post](https://a.example/)\n\n"
+        "---\n\n"
         "This newsletter was created by The Course Agent.\n\n"
         "MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026 · Class website: "
         "[cognitive-agents.media.mit.edu](https://cognitive-agents.media.mit.edu)\n\n"
@@ -2720,7 +2721,8 @@ def test_sent_issues_are_public_resources_and_drafts_stay_private(tmp_path: Path
             "**Week:** Week 1 · Sep 15 \u2013 Sep 21, 2026\n"
             "**Sent:** Sep 22, 2026\n"
             "**The assignment:** Build a minimal agent loop.\n"
-            "**Featured:** Ada\n"
+            "**Featured:** Ada\n\n"
+            "[Read Issue 01 \u2192](course://newsletter/2026-week01)\n"
         ) in index.text
         assert "2026-week02" not in index.text
         assert catalog.asset_ids(NEWSLETTER_URI) == ("logo",)

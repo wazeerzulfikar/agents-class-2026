@@ -125,6 +125,8 @@ def render_index_markdown(
                 f"**The assignment:** {issue.week.tutorial}",
                 *([f"**Featured:** {featured}"] if featured else []),
                 "",
+                f"[Read Issue {issue.week.number:02d} \u2192]({issue_uri(issue.issue_id)})",
+                "",
             ]
         )
     return "\n".join(lines).rstrip() + "\n"
