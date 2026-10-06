@@ -212,12 +212,14 @@ textarea {
   margin: 0;
 }
 
+/* The nameplate is centered, as on a printed masthead; the text below keeps its left edge. */
 .syllabus-masthead .syllabus-figure img {
   background: transparent;
   border: 0;
   border-radius: 0;
   display: block;
   height: auto;
+  margin: 0 auto;
   max-width: 100%;
   width: 30rem;
 }
