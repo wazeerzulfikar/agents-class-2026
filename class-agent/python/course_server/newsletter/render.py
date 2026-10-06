@@ -525,20 +525,29 @@ def _md_highlight(issue: NewsletterIssue, index: int, *, image_src: ImageSource)
     return lines
 
 
+def masthead_markdown(name: str, logo_src: str) -> str:
+    """The wordmark as the first block of a page, before its title."""
+
+    return f"![{_md_text(name)}]({_md_url(logo_src)})"
+
+
 def render_markdown(
     issue: NewsletterIssue,
     *,
     image_src: ImageSource | None = None,
     index_uri: str | None = None,
+    logo_src: str | None = None,
 ) -> str:
     """The issue as Markdown: the same sections as the email, links active, images by asset id.
 
-    `index_uri` adds a closing link back to the list of every issue.
+    `index_uri` adds a closing link back to the list of every issue; `logo_src` puts the
+    wordmark above the headline.
     """
 
     branding = issue.branding
     source = image_src or asset_image_source
     lines: list[str] = [
+        *([masthead_markdown(branding.newsletter_name, logo_src), ""] if logo_src else []),
         f"# {_md_text(issue.body.headline)}",
         "",
         f"**Issue:** {_md_text(branding.newsletter_name)} · Issue {issue.week.number:02d}",

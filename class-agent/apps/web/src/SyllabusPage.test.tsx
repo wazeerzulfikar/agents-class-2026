@@ -81,6 +81,65 @@ describe("SyllabusPage", () => {
     expect(screen.getByText("Not a page")).toBeInTheDocument();
   });
 
+  it("shows a wordmark before the title as the masthead, and labelled lines as facts", () => {
+    const list = [
+      "![The Class Runtime](logo)",
+      "",
+      "# The Class Runtime",
+      "",
+      "**What it is:** The weekly newsletter.",
+      "",
+      "## [Issue 01 · Loop, There It Is](course://newsletter/2026-week01)",
+      "",
+      "**Week:** Week 1 · Sep 15 – Sep 21, 2026",
+      "**Sent:** Sep 28, 2026",
+      "**Featured:** Mateo and Leticia",
+      "",
+      "Plain paragraph after the facts.",
+    ].join("\n");
+    render(
+      <SyllabusPage
+        content={list}
+        courseLinkPath={() => "/newsletter/2026-week01"}
+        error={null}
+        loading={false}
+        resolveImageSource={(source) => `/asset/${source}`}
+      />,
+    );
+    const masthead = screen.getByRole("img", { name: "The Class Runtime" });
+    expect(masthead).toHaveAttribute("src", "/asset/logo");
+    expect(masthead.closest(".syllabus-masthead")).not.toBeNull();
+    // The wordmark names the page, so the heading stays only for assistive technology.
+    expect(screen.getByRole("heading", { level: 1, name: "The Class Runtime" })).toHaveClass(
+      "ca-visually-hidden",
+    );
+    expect(screen.getByText("What it is")).toBeInTheDocument();
+    const facts = screen.getByText("Week").closest("dl");
+    expect(facts).toHaveClass("syllabus-facts");
+    expect(facts?.querySelectorAll("dt")).toHaveLength(3);
+    expect(screen.getByText("Mateo and Leticia").tagName).toBe("DD");
+    expect(screen.getByText("Plain paragraph after the facts.").tagName).toBe("P");
+    expect(screen.getByRole("link", { name: "Issue 01 · Loop, There It Is" })).toHaveAttribute(
+      "href",
+      "/newsletter/2026-week01",
+    );
+  });
+
+  it("keeps the title visible when the masthead does not name the page", () => {
+    render(
+      <SyllabusPage
+        content={"![The Class Runtime](logo)\n\n# High Five, Then Verify\n\nBody."}
+        error={null}
+        loading={false}
+        resolveImageSource={(source) => `/asset/${source}`}
+      />,
+    );
+    expect(screen.getByRole("img", { name: "The Class Runtime" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "High Five, Then Verify" })).not.toHaveClass(
+      "ca-visually-hidden",
+    );
+  });
+
   it("renders no images when the page has no image resolver", () => {
     render(<SyllabusPage content={ISSUE} error={null} loading={false} />);
     expect(screen.queryByRole("img")).not.toBeInTheDocument();

@@ -17,6 +17,8 @@ export interface DocumentLinkContext {
 }
 
 const IMAGE_BLOCK = /^(?:\[)?!\[([^\]]*)\]\(([^)\s]+)\)(?:\]\(([^)\s]+)\))?$/;
+// A labelled line: the form of the facts under a page title, also honored inside the body.
+const FACT_LINE = /^\*\*([^*]+?):\*\*\s*(.+)$/;
 
 function plainMarkdown(text: string): string {
   return text.replaceAll(/\\([\\`*{}\[\]()#+\-.!_<>|~])/g, "$1");
@@ -127,6 +129,27 @@ function markdownBlocks(
     if (figure !== null) {
       blocks.push(figure);
       index += 1;
+      continue;
+    }
+
+    if (FACT_LINE.test(line)) {
+      const facts: Array<{ label: string; value: string }> = [];
+      while (index < lines.length) {
+        const fact = FACT_LINE.exec(lines[index]?.trim() ?? "");
+        if (!fact?.[1] || !fact[2]) break;
+        facts.push({ label: fact[1], value: fact[2] });
+        index += 1;
+      }
+      blocks.push(
+        <dl className="syllabus-facts" key={`facts-${index}`}>
+          {facts.map((fact, factIndex) => (
+            <div key={`fact-${index}-${factIndex}`}>
+              <dt>{plainMarkdown(fact.label)}</dt>
+              <dd>{inlineMarkdown(fact.value, `fact-${index}-${factIndex}`, context)}</dd>
+            </div>
+          ))}
+        </dl>,
+      );
       continue;
     }
 
@@ -248,6 +271,7 @@ function markdownBlocks(
         /^\d+[.)]\s+/.test(candidate) ||
         candidate.startsWith(">") ||
         IMAGE_BLOCK.test(candidate) ||
+        FACT_LINE.test(candidate) ||
         (candidate.includes("|") && isTableDivider(lines[index + 1] ?? ""))
       ) {
         break;
@@ -310,6 +334,14 @@ export function SyllabusPage({
   const titleIndex = lines.findIndex((line) => /^#\s+/.test(line.trim()));
   const title =
     titleIndex >= 0 ? lines[titleIndex]?.trim().replace(/^#\s+/, "") ?? "Syllabus" : "Syllabus";
+  const mastheadLine = lines
+    .slice(0, Math.max(titleIndex, 0))
+    .map((line) => line.trim())
+    .find((line) => IMAGE_BLOCK.test(line));
+  const masthead = mastheadLine ? figureBlock(mastheadLine, "masthead", context) : null;
+  const mastheadAlt = mastheadLine ? plainMarkdown(IMAGE_BLOCK.exec(mastheadLine)?.[1] ?? "") : "";
+  const titleShownByMasthead =
+    masthead !== null && mastheadAlt.length > 0 && mastheadAlt === plainMarkdown(title);
   const metadata: Array<{ label: string; value: string }> = [];
   let bodyStart = Math.max(titleIndex + 1, 0);
   while (bodyStart < lines.length) {
@@ -318,7 +350,7 @@ export function SyllabusPage({
       bodyStart += 1;
       continue;
     }
-    const field = /^\*\*([^*]+?):\*\*\s*(.+)$/.exec(line);
+    const field = FACT_LINE.exec(line);
     if (!field?.[1] || !field[2]) break;
     metadata.push({ label: field[1], value: field[2] });
     bodyStart += 1;
@@ -332,7 +364,10 @@ export function SyllabusPage({
             <PdfDownload href={pdfDownloadUrl} title={pdfTitle} label={pdfLabel} />
           </div>
         ) : null}
-        <h1>{inlineMarkdown(title, "title", context)}</h1>
+        {masthead ? <div className="syllabus-masthead">{masthead}</div> : null}
+        <h1 className={titleShownByMasthead ? "ca-visually-hidden" : undefined}>
+          {inlineMarkdown(title, "title", context)}
+        </h1>
         {metadata.length ? (
           <dl className="syllabus-metadata">
             {metadata.map((field) => (

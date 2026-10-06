@@ -41,8 +41,10 @@ An issue's Markdown is `render_markdown` in `render.py`: the same sections as th
 active, and each highlight image referenced by its registered asset id (the project id folded into
 the asset-id form, `agents2026-ada` becomes `agents2026_ada`). Model- and repository-supplied text
 is escaped so it cannot become Markdown structure; links are only the platform-resolved URLs. The
-issue's assets are its highlight images and, when the single-page export exists, `pdf`, all served
-through the authorized `/api/v1/course/resources/asset` route by id.
+issue's assets are its highlight images, the masthead wordmark as `logo` (also the list's only
+asset), and, when the single-page export exists, `pdf`, all served through the authorized
+`/api/v1/course/resources/asset` route by id. Both pages begin with the wordmark; on the list it
+stands in for the title.
 
 The web app shows them under **Newsletters** in the header: `/newsletter` is the list of issues
 and `/newsletter/<issue_id>` one issue, rendered by the same course-document page as About, with

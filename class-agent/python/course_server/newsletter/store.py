@@ -69,6 +69,18 @@ class FileNewsletterStore:
         target = self.image_path(issue_id, LOGO_FILENAME)
         if target.is_file():
             return target
+        encoded = self.wordmark_bytes()
+        if encoded is None:
+            return None
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(encoded)
+        return target
+
+    def wordmark_bytes(self) -> bytes | None:
+        """The configured wordmark at email width, re-encoded; None when none is configured."""
+
+        if self._logo_path is None or not self._logo_path.is_file():
+            return None
         try:
             with Image.open(self._logo_path) as image:
                 rgba = image.convert("RGBA")
@@ -79,9 +91,7 @@ class FileNewsletterStore:
                 rgba.save(buffer, format="PNG", optimize=True)
         except (OSError, ValueError) as error:
             raise NewsletterStoreError("The newsletter logo could not be read.") from error
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(buffer.getvalue())
-        return target
+        return buffer.getvalue()
 
     def logo_bytes(self, issue_id: str) -> bytes | None:
         target = self._place_logo(issue_id)

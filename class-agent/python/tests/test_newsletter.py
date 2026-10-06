@@ -2611,6 +2611,8 @@ def test_render_markdown_carries_sections_images_links_and_escaping() -> None:
         "[All issues of The Class Runtime \u2192](course://newsletter)\n"
     ) in markdown
     assert markdown.endswith("(course://newsletter)\n")
+    with_logo = render_markdown(issue, logo_src="logo")
+    assert with_logo.startswith("![The Class Runtime](logo)\n\n# Week one is in the loop.\n")
     assert "Hal" not in markdown and "Alan Turing" not in markdown
     assert "All issues" not in render_markdown(issue)
 
@@ -2653,7 +2655,9 @@ def test_sent_issues_are_public_resources_and_drafts_stay_private(tmp_path: Path
     from course_server.api import API_PREFIX, AppServices, create_app
     from course_server.auth import AuthenticationService
 
-    store = FileNewsletterStore(tmp_path / "newsletter")
+    logo_path = tmp_path / "wordmark.png"
+    Image.new("RGBA", (1200, 400), (245, 245, 242, 255)).save(logo_path)
+    store = FileNewsletterStore(tmp_path / "newsletter", logo_path=logo_path)
     store.save(sample_issue(status="sent"))
     store.save_image("2026-week01", "agents2026-ada.jpg", b"\xff\xd8\xff-ada-jpeg")
     store.pdf_path("2026-week01").write_bytes(b"%PDF-1.7 issue one")
@@ -2703,23 +2707,39 @@ def test_sent_issues_are_public_resources_and_drafts_stay_private(tmp_path: Path
 
         # The index links every sent issue; each issue is Markdown with its images as assets.
         index = await catalog.read(NEWSLETTER_URI)
-        assert index.media_type == "text/markdown" and index.assets == {}
-        assert index.text.startswith("# The Class Runtime\n\n**What it is:** The weekly newsletter")
+        assert index.media_type == "text/markdown" and index.assets == {"logo": "image/png"}
+        # The wordmark is the first block, before the title; the site shows it as the masthead.
+        assert index.text.startswith(
+            "![The Class Runtime](logo)\n\n# The Class Runtime\n\n"
+            "**What it is:** The weekly newsletter"
+        )
         assert "**Issues:** 1\n" in index.text
+        # Each issue's facts are labelled lines, shown as a facts block on the site.
         assert (
             "## [Issue 01 · Week one is in the loop.](course://newsletter/2026-week01)\n\n"
-            "Week 1 · Sep 15 \u2013 Sep 21, 2026 · Sent Sep 22, 2026\n\n"
-            "The assignment: Build a minimal agent loop.\n\nFeatured: Ada.\n"
+            "**Week:** Week 1 · Sep 15 \u2013 Sep 21, 2026\n"
+            "**Sent:** Sep 22, 2026\n"
+            "**The assignment:** Build a minimal agent loop.\n"
+            "**Featured:** Ada\n"
         ) in index.text
         assert "2026-week02" not in index.text
-        assert catalog.asset_ids(NEWSLETTER_URI) == ()
+        assert catalog.asset_ids(NEWSLETTER_URI) == ("logo",)
+        logo = await catalog.read_asset(NEWSLETTER_URI, "logo")
+        assert logo.media_type == "image/png" and logo.data.startswith(b"\x89PNG")
+        assert Image.open(io.BytesIO(logo.data)).size == (1000, 333)
         contents = await catalog.read(issue_uri)
         assert contents.title == "The Class Runtime · Issue 01: Week one is in the loop."
         assert contents.text == render_markdown(
-            sample_issue(status="sent"), index_uri=NEWSLETTER_URI
+            sample_issue(status="sent"), index_uri=NEWSLETTER_URI, logo_src="logo"
         )
-        assert contents.assets == {"agents2026_ada": "image/jpeg", "pdf": "application/pdf"}
-        assert catalog.asset_ids(issue_uri) == ("agents2026_ada", "pdf")
+        assert contents.text.startswith("![The Class Runtime](logo)\n\n# Week one is in the loop.")
+        assert contents.assets == {
+            "agents2026_ada": "image/jpeg",
+            "logo": "image/png",
+            "pdf": "application/pdf",
+        }
+        assert catalog.asset_ids(issue_uri) == ("agents2026_ada", "logo", "pdf")
+        assert (await catalog.read_asset(issue_uri, "logo")).data == logo.data
         resource_file = await catalog.read_file(issue_uri)
         assert resource_file.data == contents.text.encode("utf-8")
         image = await catalog.read_asset(issue_uri, "agents2026_ada")
@@ -2781,7 +2801,11 @@ def test_sent_issues_are_public_resources_and_drafts_stay_private(tmp_path: Path
     assert content.headers["content-type"].startswith("text/markdown")
     assert content.headers["x-class-agent-pdf-asset"] == "pdf"
     assert content.headers["cache-control"] == "private, max-age=60"
-    assert content.text.startswith("# Week one is in the loop.")
+    assert content.text.startswith("![The Class Runtime](logo)\n\n# Week one is in the loop.")
+    wordmark = client.get(
+        f"{API_PREFIX}/course/resources/asset", params={"uri": NEWSLETTER_URI, "asset_id": "logo"}
+    )
+    assert wordmark.status_code == 200 and wordmark.headers["content-type"] == "image/png"
     assert "newsletter/issues" not in content.text
     index_page = client.get(
         f"{API_PREFIX}/course/resources/content", params={"uri": NEWSLETTER_URI}

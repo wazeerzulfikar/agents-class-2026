@@ -203,6 +203,25 @@ textarea {
   margin-bottom: var(--space-3);
 }
 
+/* The wordmark above a newsletter page; when it names the page it stands in for the title. */
+.syllabus-masthead {
+  margin: 0 0 3rem;
+}
+
+.syllabus-masthead .syllabus-figure {
+  margin: 0;
+}
+
+.syllabus-masthead .syllabus-figure img {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  display: block;
+  height: auto;
+  max-width: 100%;
+  width: 30rem;
+}
+
 .syllabus-document > h1 {
   font-size: clamp(2.75rem, 5.8vw, 5.75rem);
   font-weight: 400;
@@ -275,6 +294,39 @@ textarea {
 }
 
 .syllabus-sections strong {
+  color: var(--color-text);
+}
+
+/* Labelled facts inside a section (an issue's week, assignment, and featured students on the
+   newsletter list): the title facts' grid, at the section's scale. */
+.syllabus-facts {
+  margin: 0 0 2.5rem;
+}
+
+.syllabus-facts > div {
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(8rem, 11rem) minmax(0, 1fr);
+  padding: 0.85rem 0;
+}
+
+.syllabus-facts > div:last-child {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.syllabus-facts dt,
+.syllabus-facts dd {
+  font-size: clamp(1rem, 1.35vw, 1.2rem);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.syllabus-facts dt {
+  color: var(--color-text-muted);
+}
+
+.syllabus-facts dd {
   color: var(--color-text);
 }
 
@@ -2650,6 +2702,15 @@ textarea {
     gap: 0.4rem;
     grid-template-columns: 1fr;
     padding: 1.1rem 0;
+  }
+
+  .syllabus-facts > div {
+    gap: 0.25rem;
+    grid-template-columns: 1fr;
+  }
+
+  .syllabus-masthead {
+    margin-bottom: 2rem;
   }
 
   .syllabus-sections h1,
