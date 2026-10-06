@@ -221,7 +221,7 @@ textarea {
   height: auto;
   margin: 0 auto;
   max-width: 100%;
-  width: 30rem;
+  width: 38rem;
 }
 
 .syllabus-document > h1 {
@@ -305,7 +305,7 @@ textarea {
 }
 
 .syllabus-document[data-layout="reading"] > h1 {
-  font-size: clamp(2.5rem, 5vw, 4.5rem);
+  font-size: clamp(2.25rem, 4vw, 3.6rem);
   margin-bottom: 4rem;
   max-width: none;
 }
