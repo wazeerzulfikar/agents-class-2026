@@ -26,7 +26,7 @@ def export_pdf(
     _, _, html_path = store.paths_for(issue_id)
     if not html_path.is_file():
         raise NewsletterStoreError(f"Issue {issue_id} has no HTML preview to export.")
-    pdf_path = html_path.with_suffix(".pdf")
+    pdf_path = store.pdf_path(issue_id)
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(

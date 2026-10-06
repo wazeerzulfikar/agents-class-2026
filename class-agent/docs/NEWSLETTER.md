@@ -26,6 +26,36 @@ remain the pipeline's and the instructor's decisions. Job records live under
 `var/newsletter/jobs/` and issues carry their approval snapshot, so the status is inspectable from
 files as well as from the agent.
 
+## On the course site and through the Course Agent
+
+Every sent issue is a public course resource, and a draft is not: a draft is the instructor's
+until it is delivered. `NewsletterResourceCatalog` (`python/course_server/newsletter/resources.py`)
+wraps the registered resource catalog the way the published FAQ does and adds, at request time,
+`course://newsletter` (every sent issue, newest first, with a link to each) and one
+`course://newsletter/<issue_id>` per sent issue, both `text/markdown`. An issue appears as soon as
+the mail worker marks it `sent`; no restart or re-indexing is needed. The catalog is installed in
+the API and the agent CLI whenever the newsletter settings load, so sent issues are readable even on
+a deployment that does not draft (no GitHub token).
+
+An issue's Markdown is `render_markdown` in `render.py`: the same sections as the email, every link
+active, and each highlight image referenced by its registered asset id (the project id folded into
+the asset-id form, `agents2026-ada` becomes `agents2026_ada`). Model- and repository-supplied text
+is escaped so it cannot become Markdown structure; links are only the platform-resolved URLs. The
+issue's assets are its highlight images and, when the single-page export exists, `pdf`, all served
+through the authorized `/api/v1/course/resources/asset` route by id.
+
+The web app shows them under **Newsletters** in the header: `/newsletter` is the list of issues
+and `/newsletter/<issue_id>` one issue, rendered by the same course-document page as About, with
+figures, the closing quote, a **Download issue PDF** control, and in-app links between the list
+and its issues. The pages are public, like the About page.
+
+The Course Agent sees the same resources: `course://newsletter` and each issue are listed among the
+public course files, readable with `course.read_public_file`, found by `course.search`, and can be
+opened in the workspace's document viewer, which resolves the image ids through the same asset
+route. The `course-help` skill points the agent at them for questions about the newsletter or what
+the class built in a given week. The agent never sees drafts through these resources; the
+instructor tools above remain the only way to read a draft.
+
 ## From the command line
 
 ## What an issue contains
@@ -290,7 +320,9 @@ Chromium, produced after each draft and on demand with `pdf`), and
 opens correctly in a browser. The JSON record stores the week, the validated
 model copy, the project roster with links, the quote, status (`draft` or `sent`), and one delivery
 row per recipient with the provider message ID or the sanitized error class. Sent issues are the
-source of the fairness rule and of quote rotation, so keep this directory in staff backups.
+source of the fairness rule and of quote rotation, and of the public `course://newsletter`
+resources, so keep this directory in staff backups. The API reads only sent issues from it, by
+validated issue id; the `.pdf` is served as the issue's `pdf` asset when it exists.
 
 Each recipient receives a separate message; other recipients' addresses are never included.
 Provider acceptance is recorded per recipient. A failed recipient is recorded and the issue stays a

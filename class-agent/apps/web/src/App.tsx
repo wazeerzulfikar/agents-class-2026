@@ -14,6 +14,7 @@ import {
   confirmNewsletter,
   confirmTAQuestion,
   continueAgentAfterEvent,
+  courseDocumentImageUrl,
   createConversation,
   ensureApplicationDraft,
   generatePageGreeting,
@@ -88,7 +89,7 @@ import {
 } from "react";
 import { mergeNotificationCenterUpdates } from "./notifications.js";
 import { readStartupQuery, urlWithoutStartupQuery } from "./startupQuery.js";
-import { COURSE_DOCUMENTS, useAboutRoute } from "./aboutRoute.js";
+import { COURSE_DOCUMENTS, documentForUri, fixedDocument, useAboutRoute } from "./aboutRoute.js";
 
 const CONNECTION_ERROR = "I couldn’t reach the Course Agent. Please try again.";
 const WELCOME_MESSAGE =
@@ -273,7 +274,7 @@ export default function App() {
   const [pendingUploadCount, setPendingUploadCount] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [aboutOpen, setAboutOpen, aboutDocument] = useAboutRoute();
+  const [aboutOpen, setAboutOpen, aboutLocation] = useAboutRoute();
   const [syllabusPdfUrl, setSyllabusPdfUrl] = useState<string | undefined>();
   const [syllabusContent, setSyllabusContent] = useState<string | null>(null);
   const [syllabusError, setSyllabusError] = useState<string | null>(null);
@@ -550,6 +551,8 @@ export default function App() {
     return () => window.clearTimeout(timeout);
   }, [isOpening]);
 
+  const aboutUri = aboutLocation.uri;
+  const aboutRoute = COURSE_DOCUMENTS[aboutLocation.document];
   useEffect(() => {
     if (!aboutOpen) return;
     let disposed = false;
@@ -557,8 +560,8 @@ export default function App() {
     setSyllabusPdfUrl(undefined);
     setSyllabusError(null);
     setSyllabusLoading(true);
-    const route = COURSE_DOCUMENTS[aboutDocument];
-    void getCourseResourceContent(route.uri)
+    const route = COURSE_DOCUMENTS[aboutLocation.document];
+    void getCourseResourceContent(aboutUri)
       .then((resource) => {
         if (disposed) return;
         setSyllabusContent(new TextDecoder().decode(resource.data));
@@ -575,7 +578,7 @@ export default function App() {
     return () => {
       disposed = true;
     };
-  }, [aboutDocument, aboutOpen]);
+  }, [aboutLocation.document, aboutOpen, aboutUri]);
 
   useEffect(() => {
     if (isOpening) return;
@@ -959,15 +962,31 @@ export default function App() {
   }
 
   async function toggleAbout(): Promise<void> {
-    if (aboutOpen && aboutDocument === "syllabus") {
+    if (aboutOpen && aboutLocation.document === "syllabus") {
       setAboutOpen(false);
       requestAnimationFrame(() => composerRef.current?.focus());
       return;
     }
     setHistoryOpen(false);
     setMobileView("chat");
-    setAboutOpen(true, "syllabus");
+    setAboutOpen(true, fixedDocument("syllabus"));
   }
+
+  /** The list of issues; from an open issue it returns to the list, from the list to chat. */
+  function toggleNewsletters(): void {
+    if (aboutOpen && aboutLocation.document === "newsletter") {
+      setAboutOpen(false);
+      requestAnimationFrame(() => composerRef.current?.focus());
+      return;
+    }
+    setHistoryOpen(false);
+    setMobileView("chat");
+    setAboutOpen(true, fixedDocument("newsletter"));
+  }
+
+  const newslettersOpen =
+    aboutOpen &&
+    (aboutLocation.document === "newsletter" || aboutLocation.document === "newsletter-issue");
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1507,7 +1526,14 @@ export default function App() {
               </Button>
             ))}
             <Button
-              aria-current={aboutOpen && aboutDocument === "syllabus" ? "page" : undefined}
+              aria-current={newslettersOpen ? "page" : undefined}
+              className="newsletters-link"
+              onClick={toggleNewsletters}
+            >
+              Newsletters
+            </Button>
+            <Button
+              aria-current={aboutOpen && aboutLocation.document === "syllabus" ? "page" : undefined}
               className="about-link"
               onClick={() => void toggleAbout()}
             >
@@ -1554,10 +1580,18 @@ export default function App() {
       {aboutOpen ? (
         <SyllabusPage
           content={syllabusContent}
-          loadingMessage={COURSE_DOCUMENTS[aboutDocument].loadingMessage}
-          pdfDownloadUrl={syllabusPdfUrl}
+          courseLinkPath={(uri) => documentForUri(uri)?.path ?? null}
           error={syllabusError}
           loading={syllabusLoading}
+          loadingMessage={aboutRoute.loadingMessage}
+          onCourseLink={(uri) => {
+            const location = documentForUri(uri);
+            if (location) setAboutOpen(true, location);
+          }}
+          pdfDownloadUrl={syllabusPdfUrl}
+          pdfLabel={aboutRoute.pdfLabel}
+          pdfTitle={aboutRoute.pdfTitle}
+          resolveImageSource={(source) => courseDocumentImageUrl(aboutUri, source)}
         />
       ) : (
         <>

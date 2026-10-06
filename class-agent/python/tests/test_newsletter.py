@@ -23,6 +23,7 @@ from course_server.config import ConfigurationError
 from course_server.mail import InboundMail, OutboundMail, SentMail
 from course_server.newsletter import (
     MIN_GOAL_FIT,
+    NEWSLETTER_URI,
     PIONEER_QUOTES,
     RUBRIC,
     SCORE_SCHEMA,
@@ -39,6 +40,7 @@ from course_server.newsletter import (
     NewsletterCompositionError,
     NewsletterCopy,
     NewsletterIssue,
+    NewsletterResourceCatalog,
     NewsletterScheduleError,
     NewsletterScoringError,
     NewsletterService,
@@ -71,6 +73,7 @@ from course_server.newsletter import (
     parse_score,
     project_label,
     render_html,
+    render_markdown,
     render_text,
     score_breakdown,
     select_highlights,
@@ -2566,3 +2569,243 @@ def test_newsletter_confirmation_endpoint_checks_instructor_ownership_and_state(
     assert stored is not None and stored.status == "approved"
     assert instructor_client.post(url, json=body).status_code == 409
     assert instructor_client.post(url, json={**body, "action": "cancel"}).status_code == 409
+
+
+def test_render_markdown_carries_sections_images_links_and_escaping() -> None:
+    issue = sample_issue()
+
+    markdown = render_markdown(issue, index_uri=NEWSLETTER_URI)
+
+    assert markdown.startswith(
+        "# Week one is in the loop.\n\n"
+        "**Issue:** The Class Runtime · Issue 01\n"
+        "**Week:** Week 1 · Sep 15 \u2013 Sep 21, 2026\n"
+        "**The assignment:** Build a minimal agent loop.\n\n"
+        "## How the week went\n\n"
+        "The loop ran.\n\n"
+        "Some looped twice; see [the ReAct paper](https://arxiv.org/abs/2210.03629?x=1&y=2) "
+        "for why.\n\n"
+        "\u2014 The Course Agent\n\n"
+        "## Highlights\n\n"
+    )
+    # Model and repository strings never become Markdown structure; links come from code.
+    assert re.search(r"(?<!\\)<", markdown) is None
+    assert "### Ada \\<script>alert(1)\\</script> loops\n\n01 · Ada\n\n" in markdown
+    # The image is referenced by its registered asset id and links to the student's post.
+    assert (
+        "[![Ada \\<script>alert(1)\\</script> loops](agents2026_ada)]"
+        "(https://a.example/week01.html)\n\n"
+        "A minimal agent loop built from scratch. It is the loop asked for.\n\n"
+        "[Open Ada\u2019s build \u2192](https://a.example/week01.html)\n\n"
+        "\\* [How the Course Agent chooses what to highlight \u2192]"
+        "(https://cognitive-agents.media.mit.edu/?q=newslettercriteria)\n\n"
+        "## All the other builds this week\n\n"
+        "- [Grace](https://g.example/?x=1&y=2): Grace built a tiny tool-calling loop.\n"
+        "- **Ivy**: Nothing posted for this week yet.\n\n"
+        "## Last word\n\n"
+        "> \u201cAgents learn best when reality gets a vote.\u201d\n>\n"
+        "> \u2014 [Ada, from their week 1 post](https://a.example/)\n\n"
+        "This newsletter was created by The Course Agent.\n\n"
+        "MAS.S60 · AI Agents for Cognitive Augmentation · MIT, Fall 2026 · Class website: "
+        "[cognitive-agents.media.mit.edu](https://cognitive-agents.media.mit.edu)\n\n"
+        "[All issues of The Class Runtime \u2192](course://newsletter)\n"
+    ) in markdown
+    assert markdown.endswith("(course://newsletter)\n")
+    assert "Hal" not in markdown and "Alan Turing" not in markdown
+    assert "All issues" not in render_markdown(issue)
+
+    # Block starters and emphasis in copy are escaped, so a headline cannot become a heading.
+    spiky = issue.model_copy(
+        update={
+            "body": issue.body.model_copy(
+                update={
+                    "headline": "# 1. Loop - *fast*",
+                    "highlights": (
+                        issue.body.highlights[0].model_copy(
+                            update={"description": "- not a list\n> not a quote [x](y)"}
+                        ),
+                    ),
+                }
+            )
+        }
+    )
+    spiky_markdown = render_markdown(spiky)
+    assert spiky_markdown.startswith("# \\# 1. Loop - \\*fast\\*\n")
+    assert "\n\\- not a list\n\\> not a quote \\[x\\](y)\n" in spiky_markdown
+    # A blank build is left off the list, as in the other renderings.
+    grace_blank = issue.model_copy(
+        update={
+            "scores": tuple(
+                score.model_copy(update={"blank": score.project_id == "agents2026-grace"})
+                for score in issue.scores
+            )
+        }
+    )
+    assert "Grace" not in render_markdown(grace_blank).split("All the other builds")[1]
+
+
+def test_sent_issues_are_public_resources_and_drafts_stay_private(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    from agent_core import AgentRuntime
+    from course_server.agent import CourseAgentService, InMemoryConversationStore
+    from course_server.agent.capabilities import FileResourceProvider, ResourceNotFound
+    from course_server.api import API_PREFIX, AppServices, create_app
+    from course_server.auth import AuthenticationService
+
+    store = FileNewsletterStore(tmp_path / "newsletter")
+    store.save(sample_issue(status="sent"))
+    store.save_image("2026-week01", "agents2026-ada.jpg", b"\xff\xd8\xff-ada-jpeg")
+    store.pdf_path("2026-week01").write_bytes(b"%PDF-1.7 issue one")
+    store.save(sample_issue().model_copy(update={"issue_id": "2026-week02", "week": weeks()[1]}))
+    catalog = NewsletterResourceCatalog(
+        FileResourceProvider.with_sample_syllabus(), store, branding=NewsletterBranding()
+    )
+    session_id = uuid4()
+    anonymous = PrincipalContext(
+        authenticated=False,
+        anonymous_session_id=session_id,
+        roles=["public"],
+        session_id=session_id,
+    )
+    issue_uri = "course://newsletter/2026-week01"
+    draft_uri = "course://newsletter/2026-week02"
+
+    async def scenario() -> None:
+        # Only the sent issue is listed, for everyone; the draft is not a resource at all.
+        listed = catalog.list_public()
+        assert [summary.uri for summary in listed] == [
+            "course://syllabus",
+            NEWSLETTER_URI,
+            issue_uri,
+        ]
+        assert listed[1].title == "The Class Runtime (the weekly newsletter)"
+        assert "(1 so far)" in listed[1].description
+        assert listed[2].title == "The Class Runtime · Issue 01: Week one is in the loop."
+        assert listed[2].description == (
+            "Week 1 · Sep 15 \u2013 Sep 21, 2026. The assignment: Build a minimal agent loop. "
+            "Featured: Ada."
+        )
+        assert listed[2].media_type == "text/markdown" and listed[2].status == "published"
+        assert catalog.list_authorized(anonymous) == listed
+        assert catalog.authorized_resource_uris(anonymous) == (
+            "course://syllabus",
+            NEWSLETTER_URI,
+            issue_uri,
+        )
+        assert catalog.is_public(issue_uri) and catalog.is_public(NEWSLETTER_URI)
+        with pytest.raises(ResourceNotFound):
+            catalog.is_public(draft_uri)
+        with pytest.raises(ResourceNotFound):
+            await catalog.read(draft_uri)
+        with pytest.raises(ResourceNotFound):
+            await catalog.read_asset(draft_uri, "agents2026_ada")
+
+        # The index links every sent issue; each issue is Markdown with its images as assets.
+        index = await catalog.read(NEWSLETTER_URI)
+        assert index.media_type == "text/markdown" and index.assets == {}
+        assert index.text.startswith("# The Class Runtime\n\n**What it is:** The weekly newsletter")
+        assert "**Issues:** 1\n" in index.text
+        assert (
+            "## [Issue 01 · Week one is in the loop.](course://newsletter/2026-week01)\n\n"
+            "Week 1 · Sep 15 \u2013 Sep 21, 2026 · Sent Sep 22, 2026\n\n"
+            "The assignment: Build a minimal agent loop.\n\nFeatured: Ada.\n"
+        ) in index.text
+        assert "2026-week02" not in index.text
+        assert catalog.asset_ids(NEWSLETTER_URI) == ()
+        contents = await catalog.read(issue_uri)
+        assert contents.title == "The Class Runtime · Issue 01: Week one is in the loop."
+        assert contents.text == render_markdown(
+            sample_issue(status="sent"), index_uri=NEWSLETTER_URI
+        )
+        assert contents.assets == {"agents2026_ada": "image/jpeg", "pdf": "application/pdf"}
+        assert catalog.asset_ids(issue_uri) == ("agents2026_ada", "pdf")
+        resource_file = await catalog.read_file(issue_uri)
+        assert resource_file.data == contents.text.encode("utf-8")
+        image = await catalog.read_asset(issue_uri, "agents2026_ada")
+        assert (image.media_type, image.data) == ("image/jpeg", b"\xff\xd8\xff-ada-jpeg")
+        pdf = await catalog.read_asset(issue_uri, "pdf")
+        assert (pdf.media_type, pdf.data) == ("application/pdf", b"%PDF-1.7 issue one")
+        with pytest.raises(ResourceNotFound):
+            await catalog.read_asset(issue_uri, "agents2026_grace")
+        for not_an_asset in ("agents2026-ada", "agents2026-ada.jpg"):
+            with pytest.raises(ResourceNotFound):
+                await catalog.read_asset(issue_uri, not_an_asset)
+
+        # Course search reaches the sent issue, only when it is among the searched resources.
+        everything = frozenset(catalog.authorized_resource_uris(anonymous))
+        matches = await catalog.search("reality vote", limit=5, resource_uris=everything)
+        assert matches and matches[0].uri == issue_uri
+        assert "reality gets a vote" in matches[0].excerpt
+        assert matches[0].title == contents.title
+        without = await catalog.search(
+            "reality vote", limit=5, resource_uris=frozenset({"course://syllabus"})
+        )
+        assert all(match.uri != issue_uri for match in without)
+
+        # The registered base is untouched.
+        syllabus = await catalog.read("course://syllabus")
+        assert syllabus.uri == "course://syllabus"
+        assert catalog.list_feed_metadata(anonymous) == []
+
+        # An unreadable issue file hides the issues instead of failing requests.
+        (tmp_path / "newsletter" / "issues" / "2026-week03.json").write_text("{not json")
+        assert [summary.uri for summary in catalog.list_public()] == [
+            "course://syllabus",
+            NEWSLETTER_URI,
+        ]
+
+    asyncio.run(scenario())
+
+    # Over HTTP, anonymous visitors read the issue, its images, and its PDF; a draft is 404.
+    (tmp_path / "newsletter" / "issues" / "2026-week03.json").unlink()
+    conversations = InMemoryConversationStore()
+    app = create_app(
+        services=AppServices(
+            authentication=AuthenticationService(InMemoryAuthStore()),
+            agent=CourseAgentService(
+                runtime=cast(AgentRuntime, object()), conversations=conversations
+            ),
+            conversations=conversations,
+            course_resources=catalog,
+        )
+    )
+    client = TestClient(app, base_url="https://testserver")
+    assert [item["uri"] for item in client.get(f"{API_PREFIX}/course/resources").json()] == [
+        "course://syllabus",
+        NEWSLETTER_URI,
+        issue_uri,
+    ]
+    content = client.get(f"{API_PREFIX}/course/resources/content", params={"uri": issue_uri})
+    assert content.status_code == 200
+    assert content.headers["content-type"].startswith("text/markdown")
+    assert content.headers["x-class-agent-pdf-asset"] == "pdf"
+    assert content.headers["cache-control"] == "private, max-age=60"
+    assert content.text.startswith("# Week one is in the loop.")
+    assert "newsletter/issues" not in content.text
+    index_page = client.get(
+        f"{API_PREFIX}/course/resources/content", params={"uri": NEWSLETTER_URI}
+    )
+    assert index_page.status_code == 200 and "(course://newsletter/2026-week01)" in index_page.text
+    assert "X-Class-Agent-Pdf-Asset" not in index_page.headers
+    image = client.get(
+        f"{API_PREFIX}/course/resources/asset",
+        params={"uri": issue_uri, "asset_id": "agents2026_ada"},
+    )
+    assert image.status_code == 200 and image.headers["content-type"] == "image/jpeg"
+    assert image.content == b"\xff\xd8\xff-ada-jpeg"
+    pdf = client.get(
+        f"{API_PREFIX}/course/resources/asset", params={"uri": issue_uri, "asset_id": "pdf"}
+    )
+    assert pdf.status_code == 200 and pdf.headers["content-type"] == "application/pdf"
+    assert (
+        client.get(f"{API_PREFIX}/course/resources/content", params={"uri": draft_uri}).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"{API_PREFIX}/course/resources/asset",
+            params={"uri": draft_uri, "asset_id": "agents2026_ada"},
+        ).status_code
+        == 404
+    )

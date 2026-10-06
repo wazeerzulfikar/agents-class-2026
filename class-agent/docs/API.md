@@ -154,7 +154,9 @@ panel containing the exact authorized Markdown record. Stored assignment paths a
 remain outside the browser contract.
 
 `GET /api/v1/course/resources` returns path-free metadata for resources authorized to the
-current principal. Anonymous visitors receive the six public resources. Students also
+current principal. Anonymous visitors receive the public resources, including
+`course://newsletter` and one `course://newsletter/<issue_id>` per sent newsletter issue, which
+are read from the newsletter store at request time (drafts are never listed). Students also
 receive resources registered under the student audience, and instructors receive both
 student and instructor resources. It never returns private applicant files, temporary
 uploads, or server filesystem paths.

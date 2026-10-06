@@ -89,7 +89,7 @@ def _short_date(value: date) -> str:
     return f"{value.strftime('%b')} {value.day}"
 
 
-def _window_label(issue: NewsletterIssue) -> str:
+def window_label(issue: NewsletterIssue) -> str:
     week = issue.week
     last_day = (week.ends_at - timedelta(days=1)).date()
     return (
@@ -168,7 +168,7 @@ def render_text(issue: NewsletterIssue) -> str:
         f"{branding.newsletter_name.upper()} · ISSUE {issue.week.number:02d}",
         issue.body.headline,
         "",
-        _window_label(issue),
+        window_label(issue),
         f"THE ASSIGNMENT: {issue.week.tutorial}",
         "",
         _MARKDOWN_LINK.sub(r"\1 (\2)", issue.body.editorial),
@@ -401,7 +401,7 @@ def render_html(
         )
         + f'<h1 style="margin:0 0 24px 0;font-family:{_SANS};font-size:34px;line-height:1.15;'
         f'font-weight:500;letter-spacing:-0.01em;color:{_INK};">{escape(issue.body.headline)}</h1>'
-        f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(_window_label(issue))}</p>'
+        f'<p style="margin:0 0 10px 0;{_LABEL}">{escape(window_label(issue))}</p>'
         # The assignment is context for the issue, so it sits one step greyer than the headline.
         f'<p style="margin:0 0 6px 0;{_SECTION}color:{_MUTED};">The assignment</p>'
         f'<p style="margin:0 0 28px 0;font-family:{_SANS};font-size:20px;line-height:1.4;'
@@ -447,3 +447,148 @@ def render_html(
         f"{_TEXT_CLOSE}"
         "</td></tr></table></td></tr></table></body></html>\n"
     )
+
+
+# --- Markdown -------------------------------------------------------------------------------
+#
+# The Markdown rendering is what the course site's Newsletters pages and the Course Agent read:
+# one issue as a course resource. Highlight images are referenced by their registered asset id
+# (the project id); the site resolves ids through the authorized asset route and the agent sees
+# the same ids as the resource's registered assets.
+
+_MD_INLINE_SPECIALS = re.compile(r"[\\*_`\[\]<~]")
+_MD_BLOCK_STARTS = re.compile(r"^(\s*)([#>|+-]|\d+[.)](?=\s))")
+_MD_URL_UNSAFE = {" ": "%20", "(": "%28", ")": "%29"}
+
+
+_ASSET_ID_UNSAFE = re.compile(r"[^a-z0-9]+")
+
+
+def image_asset_id(image: HighlightImage) -> str:
+    """The registered asset id of a highlight image, in the catalog's asset-id form.
+
+    Asset ids are lowercase letters, digits, and underscores, so the project id is folded into
+    that form: `agents2026-ada` becomes `agents2026_ada`.
+    """
+
+    normalized = _ASSET_ID_UNSAFE.sub("_", image.project_id.casefold()).strip("_")
+    return normalized if normalized[:1].isalpha() else f"p_{normalized}"
+
+
+def asset_image_source(image: HighlightImage) -> str:
+    """Image references for Markdown served as a course resource: the registered asset id."""
+
+    return image_asset_id(image)
+
+
+def _md_text(text: str) -> str:
+    """Escape prose so no model- or repository-supplied string becomes Markdown structure."""
+
+    escaped = _MD_INLINE_SPECIALS.sub(lambda match: "\\" + match.group(0), text)
+    return "\n".join(_MD_BLOCK_STARTS.sub(r"\1\\\2", line) for line in escaped.splitlines())
+
+
+def _md_url(url: str) -> str:
+    return "".join(_MD_URL_UNSAFE.get(character, character) for character in url)
+
+
+def _md_link(label: str, url: str) -> str:
+    return f"[{_md_text(label)}]({_md_url(url)})"
+
+
+def _md_prose(text: str) -> str:
+    """Escape prose while keeping its validated Markdown links as links."""
+
+    parts: list[str] = []
+    position = 0
+    for match in _MARKDOWN_LINK.finditer(text):
+        parts.append(_md_text(text[position : match.start()]))
+        parts.append(_md_link(match.group(1), match.group(2)))
+        position = match.end()
+    parts.append(_md_text(text[position:]))
+    return "".join(parts)
+
+
+def _md_highlight(issue: NewsletterIssue, index: int, *, image_src: ImageSource) -> list[str]:
+    highlight = issue.body.highlights[index - 1]
+    link = issue.link_for(highlight.project_id)
+    label = link.label if link else highlight.project_id
+    site_url = (link.post_url or link.site_url) if link else None
+    image = issue.image_for(highlight.project_id)
+    lines = [f"### {_md_text(highlight.headline)}", "", f"{index:02d} · {_md_text(label)}", ""]
+    if image is not None:
+        figure = f"![{_md_text(highlight.headline)}]({_md_url(image_src(image))})"
+        lines.extend([f"[{figure}]({_md_url(site_url)})" if site_url else figure, ""])
+    lines.extend([_md_text(highlight.description), ""])
+    if site_url:
+        lines.extend([_md_link(f"Open {label}\u2019s build \u2192", site_url), ""])
+    return lines
+
+
+def render_markdown(
+    issue: NewsletterIssue,
+    *,
+    image_src: ImageSource | None = None,
+    index_uri: str | None = None,
+) -> str:
+    """The issue as Markdown: the same sections as the email, links active, images by asset id.
+
+    `index_uri` adds a closing link back to the list of every issue.
+    """
+
+    branding = issue.branding
+    source = image_src or asset_image_source
+    lines: list[str] = [
+        f"# {_md_text(issue.body.headline)}",
+        "",
+        f"**Issue:** {_md_text(branding.newsletter_name)} · Issue {issue.week.number:02d}",
+        f"**Week:** {_md_text(window_label(issue))}",
+        f"**The assignment:** {_md_text(issue.week.tutorial)}",
+        "",
+        "## How the week went",
+        "",
+    ]
+    for paragraph in re.split(r"\n\s*\n|\n", issue.body.editorial):
+        if paragraph.strip():
+            lines.extend([_md_prose(paragraph.strip()), ""])
+    lines.extend([f"\u2014 {_md_text(branding.editor_name)}", "", "## Highlights", ""])
+    for index in range(1, len(issue.body.highlights) + 1):
+        lines.extend(_md_highlight(issue, index, image_src=source))
+    lines.extend(
+        [
+            "\\* " + _md_link(f"{_selection_line(issue)} \u2192", highlights_question_url(issue)),
+            "",
+            "## All the other builds this week",
+            "",
+        ]
+    )
+    others = issue.other_projects()
+    if others:
+        for link in others:
+            built = issue.built_for(link.project_id) or "Nothing posted for this week yet."
+            url = link.post_url or link.site_url
+            name = _md_link(link.label, url) if url else f"**{_md_text(link.label)}**"
+            lines.append(f"- {name}: {_md_text(built)}")
+    else:
+        lines.append("Everyone who posted made the highlights this week.")
+    attribution = _md_text(f"{issue.quote.author}, {issue.quote.source}")
+    if issue.quote.url:
+        attribution = _md_link(f"{issue.quote.author}, {issue.quote.source}", issue.quote.url)
+    lines.extend(
+        [
+            "",
+            "## Last word",
+            "",
+            f"> \u201c{_md_text(issue.quote.text)}\u201d",
+            ">",
+            f"> \u2014 {attribution}",
+            "",
+            f"This newsletter was created by {_md_text(branding.editor_name)}.",
+            "",
+            f"{_md_text(_course_line(issue))} · Class website: "
+            + _md_link(_site_label(branding.course_site_url), branding.course_site_url),
+        ]
+    )
+    if index_uri:
+        lines.extend(["", _md_link(f"All issues of {branding.newsletter_name} \u2192", index_uri)])
+    return "\n".join(lines).rstrip() + "\n"

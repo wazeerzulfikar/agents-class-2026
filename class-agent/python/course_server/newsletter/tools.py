@@ -98,7 +98,7 @@ def issue_summary(issue: NewsletterIssue, store: FileNewsletterStore) -> dict[st
     """What the agent needs to present a draft: copy, selection, reasons, and file paths."""
 
     _, text_path, html_path = store.paths_for(issue.issue_id)
-    pdf_path = html_path.with_suffix(".pdf")
+    pdf_path = store.pdf_path(issue.issue_id)
     highlights: list[JsonValue] = []
     for index, highlight in enumerate(issue.body.highlights, start=1):
         link = issue.link_for(highlight.project_id)

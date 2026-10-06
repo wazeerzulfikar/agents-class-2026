@@ -161,7 +161,9 @@ prefix, and exclusions are enforced in platform code. See
 [docs/STUDENT_PROJECTS.md](docs/STUDENT_PROJECTS.md).
 
 Instructors can produce the weekly class newsletter, *The Class Runtime*, with the command line
-described under [Newsletter](#newsletter) below.
+described under [Newsletter](#newsletter) below. Every sent issue is a public course resource:
+the site lists them under **Newsletters** (`/newsletter`, one issue at `/newsletter/<issue_id>`)
+and the Course Agent reads, searches, and opens them like any other public course file.
 
 Weekly showcase selection is available to staff through the read-only project integration:
 two rubric-ranked builds plus two weighted random draws, with a two-issue cooldown and reduced
@@ -228,6 +230,7 @@ The code lives in [`python/course_server/newsletter/`](python/course_server/news
 | `store.py`, `models.py` | Issue records, scores, images, and delivery history under `var/newsletter/` |
 | `service.py` | The draft and send workflow that ties the pieces together |
 | `quotes.py` | The rotating closing quotes from AI pioneers |
+| `resources.py` | Sent issues as the public `course://newsletter` resources the site and the Course Agent read |
 
 Tests are in `python/tests/test_newsletter.py`; the operational reference, including how
 selection and images work and what the model can and cannot decide, is

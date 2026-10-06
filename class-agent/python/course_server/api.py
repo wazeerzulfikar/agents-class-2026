@@ -113,6 +113,8 @@ from course_server.mail import (
 from course_server.migrations import apply_migrations
 from course_server.newsletter import (
     NEWSLETTER_CONFIRMATION_EVENT,
+    FileNewsletterStore,
+    NewsletterResourceCatalog,
     NewsletterService,
     NewsletterSettings,
     NewsletterStateError,
@@ -894,22 +896,35 @@ def create_app(
             questions=question_store,
             instructor_messages=instructor_message_store,
         )
+        newsletter_settings: NewsletterSettings | None = None
+        try:
+            newsletter_settings = NewsletterSettings.from_environment(os.environ)
+        except ConfigurationError as error:
+            logger.warning("Newsletter disabled (%s)", type(error).__name__)
         newsletter_tools: NewsletterTools | None = None
-        if resolved_settings.github_student_projects_enabled:
+        if resolved_settings.github_student_projects_enabled and newsletter_settings is not None:
             try:
                 newsletter_tools = build_newsletter_tools(
-                    resolved_settings,
-                    NewsletterSettings.from_environment(os.environ),
-                    auth=auth_store,
+                    resolved_settings, newsletter_settings, auth=auth_store
                 )
             except (ConfigurationError, OSError, ValueError) as error:
                 logger.warning("Newsletter tools disabled (%s)", type(error).__name__)
-        course_resources = PublishedFaqResourceCatalog(
+        course_resources: CourseResourceCatalog = PublishedFaqResourceCatalog(
             FileResourceProvider.from_registry(
                 protected_data_path=resolved_settings.course_data_path
             ),
             faq_knowledge,
         )
+        if newsletter_settings is not None:
+            # Sent issues are public course resources: the site's Newsletters pages and the
+            # Course Agent read them even when drafting (GitHub) is not configured here.
+            course_resources = NewsletterResourceCatalog(
+                course_resources,
+                FileNewsletterStore(
+                    newsletter_settings.data_path, logo_path=newsletter_settings.logo_path
+                ),
+                branding=newsletter_settings.branding,
+            )
         skills = SkillCatalog.from_registry(resolved_settings.skills_path)
         upload_store = FileTemporaryUploadStore(resolved_settings.upload_data_path)
         component_registry = load_component_registry()

@@ -41,6 +41,12 @@ class FileNewsletterStore:
         base = self.issues_directory / issue_id
         return base.with_suffix(".json"), base.with_suffix(".txt"), base.with_suffix(".html")
 
+    def pdf_path(self, issue_id: str) -> Path:
+        """Where `pdf` exports the single-page rendering; it exists only after an export."""
+
+        _, _, html_path = self.paths_for(issue_id)
+        return html_path.with_suffix(".pdf")
+
     def save(self, issue: NewsletterIssue) -> Path:
         json_path, text_path, html_path = self.paths_for(issue.issue_id)
         self.issues_directory.mkdir(parents=True, exist_ok=True)

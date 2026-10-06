@@ -65,7 +65,21 @@ from .models import (
     issue_subject,
 )
 from .quotes import PIONEER_QUOTES, choose_quote
-from .render import cid_image_source, relative_image_source, render_html, render_text
+from .render import (
+    asset_image_source,
+    cid_image_source,
+    image_asset_id,
+    relative_image_source,
+    render_html,
+    render_markdown,
+    render_text,
+)
+from .resources import (
+    NEWSLETTER_URI,
+    NewsletterResourceCatalog,
+    issue_uri,
+    render_index_markdown,
+)
 from .schedule import NewsletterScheduleError, load_schedule, parse_schedule, select_week
 from .score import (
     MIN_GOAL_FIT,
@@ -101,6 +115,7 @@ __all__ = [
     "HIGHLIGHTS_SCHEMA",
     "MIN_GOAL_FIT",
     "NEWSLETTER_CONFIRMATION_EVENT",
+    "NEWSLETTER_URI",
     "PIONEER_QUOTES",
     "RUBRIC",
     "SCORE_SCHEMA",
@@ -129,6 +144,7 @@ __all__ = [
     "NewsletterCopy",
     "NewsletterIssue",
     "NewsletterJobRunner",
+    "NewsletterResourceCatalog",
     "NewsletterScheduleError",
     "NewsletterScoringError",
     "NewsletterService",
@@ -150,6 +166,7 @@ __all__ = [
     "SiteScreenshot",
     "WeeklyDigest",
     "WeeklyEvidenceCollector",
+    "asset_image_source",
     "build_editorial_system_prompt",
     "build_editorial_user_prompt",
     "build_highlights_system_prompt",
@@ -166,9 +183,11 @@ __all__ = [
     "discover_week_pages",
     "encode_jpeg",
     "filter_candidates",
+    "image_asset_id",
     "issue_id_for",
     "issue_subject",
     "issue_summary",
+    "issue_uri",
     "job_summary",
     "learning_goals_from_syllabus",
     "link_resolves",
@@ -183,6 +202,8 @@ __all__ = [
     "read_rendered_week_post",
     "relative_image_source",
     "render_html",
+    "render_index_markdown",
+    "render_markdown",
     "render_text",
     "score_breakdown",
     "score_projects",

@@ -23,6 +23,16 @@ export function courseResourceAssetUrl(resourceUri: string, assetId: string): st
   return `${API_BASE_URL}/course/resources/asset?${query}`;
 }
 
+/**
+ * Where an image inside a course document loads from. A bare name is a registered asset id of
+ * that resource, resolved through the authorized asset route (which validates it); an https URL
+ * is used as is; anything else is dropped.
+ */
+export function courseDocumentImageUrl(resourceUri: string, source: string): string | null {
+  if (/^https:\/\//.test(source)) return source;
+  return /^[^\s/:?#]+$/.test(source) ? courseResourceAssetUrl(resourceUri, source) : null;
+}
+
 export function applicantPhotoUrl(resourceUri: string): string | null {
   const match = APPLICANT_PHOTO_URI.exec(resourceUri);
   return match?.[1]
@@ -578,10 +588,16 @@ const RESOURCE_ACTIVITY_LABELS: Record<string, string> = {
   "course://application": "application information",
   "course://faq": "course information index",
   "course://instructors": "course staff",
+  "course://newsletter": "the class newsletter",
   "course://repositories": "student repositories",
   "course://schedule": "course schedule",
   "course://syllabus": "course syllabus",
 };
+
+function resourceActivityLabel(uri: string): string | null {
+  if (uri.startsWith("course://newsletter/")) return "a newsletter issue";
+  return RESOURCE_ACTIVITY_LABELS[uri] ?? null;
+}
 
 const TOOL_ACTIVITY_LABELS: Record<string, string> = {
   "course.get_application": "Reading application information",
@@ -676,7 +692,7 @@ function platformActivity(data: Record<string, unknown>): AgentActivity | null {
   }
   if (type === "resource.read") {
     const uri = payload && typeof payload.uri === "string" ? payload.uri : null;
-    const resourceLabel = uri ? RESOURCE_ACTIVITY_LABELS[uri] : null;
+    const resourceLabel = uri ? resourceActivityLabel(uri) : null;
     return activity(
       "resource",
       resourceLabel ? `Reading ${resourceLabel}` : "Reading course information",
