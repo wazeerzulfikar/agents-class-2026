@@ -47,6 +47,7 @@ from course_server.newsletter_tool_ids import NEWSLETTER_TOOL_IDS
 from course_server.resource_text import ResourceTextExtractionError, extract_resource_text
 from course_server.student_project_tool_ids import (
     INSPECT_STUDENT_REPOSITORY_TOOL_ID,
+    SHOWCASE_TOOL_IDS,
     STUDENT_PROJECT_TOOL_IDS,
 )
 from course_server.uploads import (
@@ -2723,7 +2724,7 @@ class CourseCapabilityPolicy:
             else ()
         )
         staff_project_tools = (
-            (INSPECT_STUDENT_REPOSITORY_TOOL_ID,)
+            (INSPECT_STUDENT_REPOSITORY_TOOL_ID, *SHOWCASE_TOOL_IDS)
             if self._student_projects_enabled
             and principal.authenticated
             and ({"ta", "instructor", "admin"} & set(principal.roles))

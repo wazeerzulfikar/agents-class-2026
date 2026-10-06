@@ -12,6 +12,9 @@ course://faq
 course://instructors
 course://application
 course://slides/week-01
+course://slides/week-02
+course://slides/week-03
+course://readings/software-agents-bradshaw
 ```
 
 Each published file has a `resource.json` sidecar under `shared/course/`. The sidecars
@@ -80,6 +83,10 @@ and the agent can inspect the focused page visually on demand through the author
 searchable. The renderer receives only registered course bytes or a principal-owned temporary
 upload; rendered PNG bytes are ephemeral and are not stored in conversation history.
 
+Public course readings use a dedicated directory per artifact under
+`shared/course/readings/` and a `course://readings/<reading-id>` URI. PDF readings are
+indexed for agent reads and search and open as the registered artifact in DocumentViewer.
+
 `course_server.index_resources` regenerates the catalog from every sidecar manifest,
 then synchronizes the searchable PostgreSQL copy. Production API and Course Agent CLI
 startup run this command automatically after migrations, so a normal backend restart
@@ -124,7 +131,7 @@ Public indexing copies these optional fields into the generated registry. Protec
 retain them only in their server-owned sidecars.
 
 Structured course assignments do not live in resource manifests. Their canonical records are one
-validated JSON file each under `ASSIGNMENT_DATA_PATH`, defaulting to `var/assignments/`. They have
+validated JSON file each in a dedicated directory under `ASSIGNMENT_DATA_PATH`. They have
 their own agent read/authoring tools and independently drive release and upcoming notifications. See
 [ASSIGNMENTS.md](ASSIGNMENTS.md). Manifest deadlines remain useful for non-assignment course events
 and for deployments that already maintain generic resource deadline metadata.

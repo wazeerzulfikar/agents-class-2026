@@ -35,7 +35,7 @@ Submitting a new prompt immediately removes the prior answer and resets the
 activity trace, so only the new run's process is visible until its answer begins.
 Canonical history is still persisted as events and is available through the conversation drawer.
 Open the About page from the right side of the header or link directly to `/about`.
-The browser URL and Back/Forward navigation remain synchronized with that page. It
+The browser URL and Back/Forward navigation remain synchronized with that page. Notifications and their desktop/mobile layout state are hidden while About is open and restored when returning to chat. It
 contains a concise description, new/history navigation, and student login or logout
 without adding persistent chrome to the main interface.
 
@@ -64,8 +64,10 @@ runtime preserves the agent's final wording instead of substituting a platform-a
 Optional context needed by staff remains part of the prepared request but is not rendered as a
 second explanation in the student interface. Internal tracking codes, subject lines, greetings,
 sign-offs, and transport formatting stay out of the student interface. The composer pauses
-until the student chooses **Send** or **Cancel**. The Course Agent is instructed not to repeat the
-detailed question already visible in the confirmation. Send only queues the dedicated mail worker;
+until the student chooses **Send** or **Cancel**. A persistent **Discard draft** action remains in
+the composer while a confirmation is pending, so a restored draft can always be cancelled even
+when its preview is taller than the available response area. The Course Agent is instructed not to
+repeat the detailed question already visible in the confirmation. Send only queues the dedicated mail worker;
 the UI closes the confirmation and asks the Course Agent to continue from the trusted action event.
 The agent receives the completed action and exact submitted question and decides what to say next,
 including whether to acknowledge the send or continue other unfinished work. The browser contains
@@ -138,10 +140,11 @@ the authorized history projection. **See more** replaces the active projection w
 items in each non-empty category, ordered newest first; each category can then expand to its full
 retained history or return to the three-item preview.
 
-**Lecture Slides** appears only after **See more**, follows Upcoming, and lists authorized published slide decks in descending
-lecture order, with the registered deck title beneath each lecture number and a first-slide
-thumbnail replacing the generic icon. Thumbnails fill and crop to the same tile dimensions as
-Upcoming deadlines; Updates tiles use those same dimensions. Existing card spacing and interaction styles remain. Its
+**Lecture Slides** follows Upcoming. The current front-page projection shows the newest authorized
+published deck, while **See more** lists every authorized published deck in descending lecture order.
+Each card places the registered deck title beneath its lecture number and uses a first-slide thumbnail
+in place of the generic icon. Thumbnails fill and crop to the same tile dimensions as Upcoming
+deadlines; Updates tiles use those same dimensions. Existing card spacing and interaction styles remain. Its
 **View slides** action asks the Course Agent to open the registered deck in the workspace.
 Slides remain available in history after viewing and are excluded from unread counts and greeting reminders.
 
@@ -236,7 +239,8 @@ PDF resources with page navigation and document search.
 
 Press Enter to send and Shift+Enter for a newline. The composer is an ordinary
 accessible textarea despite having no visible input box. Typing a printable key
-while the page itself is focused moves focus into the composer.
+while the page itself is focused moves focus into the composer. **Clear draft** removes
+ordinary unsent text and attachments without starting an agent run.
 
 ## Data flow
 
@@ -306,7 +310,8 @@ rounded image, heading, badge, facts, biography, and link. The agent cannot supp
 classes or arbitrary style declarations.
 
 DocumentViewer opens a specific Markdown, text, or PDF artifact for close reading and
-focused discussion. PDF pages preserve their aspect ratio and fit inside the usable workspace
+focused discussion. Markdown uses the maintained CommonMark/GFM renderer, including tables,
+and skips raw HTML without changing the underlying authorized resource bytes. PDF pages preserve their aspect ratio and fit inside the usable workspace
 area; the viewer rerenders them offscreen when the desktop pane or narrow Workspace surface changes
 size, then swaps in the completed frame so composer and layout changes do not flash a blank page.
 While its resource request is pending, the workspace centers the opening label and a thin
@@ -315,8 +320,9 @@ response content length when available and remains indeterminate when the server
 It is not the default for knowledge extracted from documents: the agent synthesizes that knowledge
 into a VisualComposition. Calendar provides agenda and
 month views over a normalized resource without embedding schedule data in component
-code. Panel focus and close use semantic operations rather than arbitrary DOM or
-JavaScript.
+code. Agenda readings preserve authored HTTPS links as a responsive numbered citation
+list outside the event-selection control, so links remain independently accessible.
+Panel focus and close use semantic operations rather than arbitrary DOM or JavaScript.
 
 VisualComposition treats its workspace as the detailed answer, so chat provides only a
 short handoff instead of repeating the same facts. Fractional media widths do not shrink

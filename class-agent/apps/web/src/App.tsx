@@ -1134,6 +1134,24 @@ export default function App() {
     }
   }
 
+  function discardPendingDraft(): void {
+    if (awaitingInstructorMessageAction) {
+      void handleInstructorMessageAction("cancel");
+      return;
+    }
+    if (awaitingTAQuestionAction) {
+      void handleTAQuestionAction("cancel", "named");
+    }
+  }
+
+  function clearComposerDraft(): void {
+    setMessage("");
+    setUploads([]);
+    setUploadError(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
   async function runAgentContinuation(
     conversationId: string,
     triggerEventId: string,
@@ -1398,6 +1416,7 @@ export default function App() {
     !isOpening && latestResponse === WELCOME_MESSAGE && isPresentingWelcome;
   const hasOpenWorkspace = workspaceState.panels.length > 0;
   const notificationCenterVisible =
+    !aboutOpen &&
     principal?.authenticated === true &&
     (notificationCenter.items.length > 0 ||
       (notificationCenter.history_items?.length ?? 0) > 0) &&
@@ -1700,7 +1719,11 @@ export default function App() {
               enterKeyHint="send"
               onChange={(event) => setMessage(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder="Start typing to interact with the agent"
+              placeholder={
+                awaitingConfirmationAction
+                  ? "Review the draft above or discard it"
+                  : "Start typing to interact with the agent"
+              }
               rows={1}
               spellCheck
               value={message}
@@ -1711,20 +1734,47 @@ export default function App() {
               </p>
             ) : null}
             <div className="composer-actions">
-              <button
-                aria-label="Attach files"
-                className="attachment-button"
-                disabled={
-                  isInitializing || isRunning || isUploading || awaitingConfirmationAction
-                }
-                onClick={() => fileInputRef.current?.click()}
-                type="button"
-              >
-                <svg aria-hidden="true" viewBox="0 0 24 24">
-                  <path d="m8.5 12.5 6.8-6.8a3 3 0 1 1 4.2 4.2l-8.2 8.2a5 5 0 0 1-7.1-7.1l7.5-7.5" />
-                </svg>
-                {isUploading ? "Uploading" : "Attach"}
-              </button>
+              {awaitingConfirmationAction ? (
+                <button
+                  className="composer-draft-action"
+                  disabled={
+                    taQuestion?.status === "submitting" ||
+                    instructorMessage?.status === "submitting"
+                  }
+                  onClick={discardPendingDraft}
+                  type="button"
+                >
+                  {taQuestion?.status === "submitting" ||
+                  instructorMessage?.status === "submitting"
+                    ? "Discarding…"
+                    : "Discard draft"}
+                </button>
+              ) : (
+                <>
+                  <button
+                    aria-label="Attach files"
+                    className="attachment-button"
+                    disabled={isInitializing || isRunning || isUploading}
+                    onClick={() => fileInputRef.current?.click()}
+                    type="button"
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 24 24">
+                      <path d="m8.5 12.5 6.8-6.8a3 3 0 1 1 4.2 4.2l-8.2 8.2a5 5 0 0 1-7.1-7.1l7.5-7.5" />
+                    </svg>
+                    {isUploading ? "Uploading" : "Attach"}
+                  </button>
+                  {message.length > 0 || uploads.length > 0 ? (
+                    <button
+                      className="composer-draft-action"
+                      disabled={isInitializing || isRunning || isUploading}
+                      onClick={clearComposerDraft}
+                      type="button"
+                    >
+                      Clear draft
+                    </button>
+                  ) : null}
+                </>
+              )}
             </div>
           </div>
         </div>

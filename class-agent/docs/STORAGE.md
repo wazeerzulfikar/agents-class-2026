@@ -65,13 +65,14 @@ draft while keeping the durable answer independent from later instructor-convers
 
 ## Course assignments
 
-`ASSIGNMENT_DATA_PATH` defaults to `var/assignments/`. Each assignment is a separately validated
-`<assignment_id>.json` file; the ID must match its filename. The store creates the directory with
-mode `0700` and tool-created files with mode `0600`, rejects path indirection and unknown fields,
-and refuses to overwrite an existing ID. Validated updates require the reviewed current revision,
-atomically replace that one record, and preserve its original creator and creation time. Student
-and TA reads expose only released published records; instructor reads may also include drafts and scheduled records. See
-[ASSIGNMENTS.md](ASSIGNMENTS.md) for the complete schema and authoring workflow.
+`ASSIGNMENT_DATA_PATH` defaults to `var/assignments/`. Each assignment directory contains a
+separately validated `<assignment_id>.json` file; the ID must match its directory and filename.
+Flat JSON records remain readable for migration compatibility. The store creates root and assignment
+directories with mode `0700` and tool-created files with mode `0600`, rejects path indirection and
+unknown fields, and refuses to overwrite an existing ID. Validated updates require the reviewed
+current revision, atomically replace that one record, and preserve its original creator and creation
+time. Student and TA reads expose only released published records; instructor reads may also include
+drafts and scheduled records. See [ASSIGNMENTS.md](ASSIGNMENTS.md) for the complete schema and workflow.
 
 Current writes use assignment schema version 3 and store the full student-facing document as
 Markdown. Platform code generates the assignment ID and derives a short notification summary. The
@@ -255,3 +256,17 @@ confirmation and private event payload additions are optional and default to in-
 ## PostgreSQL integration tests
 
 Set `TEST_DATABASE_URL` to a disposable development PostgreSQL database and run `uv run pytest -m postgres`. Tests create a random isolated schema and drop that schema afterward. They do not modify the database's public schema.
+
+## Weekly presentation history
+
+Weekly presentation history lives in the private, Git-ignored
+`var/student-showcase/history.json` (`SHOWCASE_HISTORY_PATH` override). Staff maintain the
+version-1 issue list manually; showcase tools only read it. Back up and restore this file with
+other private course state. Missing or invalid history blocks selection. See
+[STUDENT_PROJECTS.md](STUDENT_PROJECTS.md#enter-week-1-selections-here) for the Week 1 entry format.
+
+The adjacent private `selections/week-NN.json` files store version-1 reviewed pools, evidence,
+scores and draws for consistent retries. They are written atomically under a file lock and
+must be included in protected backups. Staff explicitly archive a week's snapshot to request
+a fresh review; presentation history stays intact. See
+[STUDENT_PROJECTS.md](STUDENT_PROJECTS.md#saved-reviews-and-display-retries).

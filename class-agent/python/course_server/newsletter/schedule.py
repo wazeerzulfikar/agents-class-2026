@@ -10,9 +10,10 @@ from zoneinfo import ZoneInfo
 
 from .models import CourseWeek
 
+# The date, topic, and tutorial cells; any further columns (suggested readings) are ignored.
 _WEEK_ROW = re.compile(
     r"^\|\s*Week\s+(?P<number>\d+)\s*\(\s*(?P<month>\d{1,2})/(?P<day>\d{1,2})\s*\)\s*\|"
-    r"(?P<topic>[^|]*)\|(?P<tutorial>[^|]*)\|\s*$"
+    r"(?P<topic>[^|]*)\|(?P<tutorial>[^|]*)\|(?:.*\|)?\s*$"
 )
 _YEAR = re.compile(r"\b(20\d{2})\b")
 # The schedule marks speakers in *italics*; they are not part of the topic or the brief.

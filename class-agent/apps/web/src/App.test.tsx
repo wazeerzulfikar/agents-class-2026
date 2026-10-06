@@ -630,7 +630,14 @@ describe("Course Agent interface", () => {
     expect(api.createConversation).not.toHaveBeenCalled();
     expect(api.generatePageGreeting).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const composerForm = screen.getByRole("form", {
+      name: "Message Course Agent",
+    });
+    const discardDraft = within(composerForm).getByRole("button", {
+      name: "Discard draft",
+    });
+    expect(discardDraft).toBeVisible();
+    fireEvent.click(discardDraft);
 
     await waitFor(() =>
       expect(api.confirmInstructorMessage).toHaveBeenCalledWith(
@@ -1325,6 +1332,54 @@ describe("Course Agent interface", () => {
     expect(screen.queryByRole("dialog", { name: "Chat history" })).not.toBeInTheDocument();
   });
 
+  it.each(["navigation", "direct URL"])(
+    "hides notifications on About via %s and restores them on return",
+    async (entry) => {
+      vi.mocked(api.getPrincipal).mockResolvedValue(studentPrincipal);
+      vi.mocked(api.getNotificationCenter).mockResolvedValue({
+        generated_at: "2026-09-05T12:00:00Z",
+        unread_count: 0,
+        items: [{
+          id: "60000000-0000-4000-8000-000000000021",
+          section: "communications",
+          kind: "pending_message",
+          state: "pending",
+          title: "Model choice",
+          detail: "May I use a local model?",
+          timestamp: "2026-09-05T10:00:00Z",
+          due_at: null,
+          action_label: "Check status",
+          action_prompt: "Check my question.",
+          unread: false,
+          dismissible: false,
+          sender: null,
+        }],
+      });
+      if (entry === "direct URL") window.history.replaceState({}, "", "/about");
+      const { container } = render(<App />);
+      if (entry === "navigation") {
+        expect(await screen.findByRole("complementary", { name: "Notification center" }))
+          .toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "About" }));
+      }
+      expect(await screen.findByRole("heading", {
+        level: 1, name: "AI Agents for Cognitive Augmentation",
+      })).toBeInTheDocument();
+      await waitFor(() => expect(api.getNotificationCenter).toHaveBeenCalled());
+      expect(screen.queryByRole("complementary", { name: "Notification center" }))
+        .not.toBeInTheDocument();
+      expect(container.querySelector(".course-agent"))
+        .toHaveAttribute("data-notifications-open", "false");
+      expect(container.querySelector(".course-agent"))
+        .toHaveAttribute("data-mobile-notifications-open", "false");
+      fireEvent.click(screen.getByRole("button", { name: "About" }));
+      expect(await screen.findByRole("complementary", { name: "Notification center" }))
+        .toBeInTheDocument();
+      expect(container.querySelector(".course-agent"))
+        .toHaveAttribute("data-notifications-open", "true");
+    },
+  );
+
   it("loads About directly from the registered syllabus resource", async () => {
     render(<App />);
     await openExistingConversation();
@@ -1560,6 +1615,21 @@ describe("Course Agent interface", () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+
+  it("clears an unfinished composer draft without sending it", async () => {
+    render(<App />);
+    await openExistingConversation();
+
+    const composer = screen.getByRole("textbox", { name: "Message" });
+    fireEvent.change(composer, { target: { value: "An unfinished thought" } });
+    fireEvent.click(screen.getByRole("button", { name: "Clear draft" }));
+
+    expect(composer).toHaveValue("");
+    expect(api.streamAgentRun).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: "Clear draft" }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps inspectable agent activity visually separate and expandable", async () => {

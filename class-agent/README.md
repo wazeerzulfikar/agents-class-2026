@@ -94,8 +94,8 @@ normally belongs in protected production backups. See
 [docs/COURSE_RESOURCES.md](docs/COURSE_RESOURCES.md) for resource manifests, automatic
 indexing, uploads, and application-storage operations.
 
-Course assignments are one validated JSON file each under `ASSIGNMENT_DATA_PATH` (default
-`var/assignments/`). Released assignments are available to logged-in students and TAs through the
+Course assignments are one validated JSON file each in a dedicated directory under
+`ASSIGNMENT_DATA_PATH` (default `var/assignments/`). Released assignments are available to logged-in students and TAs through the
 agent and drive the notification center's release and fourteen-day deadline items; reading one opens
 the exact posted Markdown in the workspace. The application does not expose an assignment-authoring
 tool or editor. See
@@ -162,6 +162,11 @@ prefix, and exclusions are enforced in platform code. See
 
 Instructors can produce the weekly class newsletter, *The Class Runtime*, with the command line
 described under [Newsletter](#newsletter) below.
+
+Weekly showcase selection is available to staff through the read-only project integration:
+two rubric-ranked builds plus two weighted random draws, with a two-issue cooldown and reduced
+weight for older appearances. Enter actual Week 1 presenters in
+`var/student-showcase/history.json`; see [the setup and policy](docs/STUDENT_PROJECTS.md#weekly-build-showcase).
 
 Staff-published FAQ knowledge is kept separately from maintained course files in one local,
 versioned JSON file at `var/course-knowledge/published-faq.json`. The mail worker updates it
